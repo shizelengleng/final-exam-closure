@@ -141,6 +141,10 @@ interface ElectronAPI {
     addConversation: (message: any) => Promise<{ success: boolean }>
     getConversations: (subjectId?: string) => Promise<any[]>
   }
+  clipboard: {
+    readText: () => string
+    writeText: (text: string) => void
+  }
 }
 
 declare global {

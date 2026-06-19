@@ -111,6 +111,50 @@ const TerminalPanel = () => {
         termRef.current = term
         fitAddonRef.current = fitAddon
 
+        // Enable clipboard paste via Ctrl+V / right-click
+        const readClipboard = async (): Promise<string> => {
+          try {
+            const text = await navigator.clipboard.readText()
+            if (text) return text
+          } catch {}
+          try {
+            return window.electron?.clipboard?.readText() || ''
+          } catch {}
+          return ''
+        }
+
+        const writeClipboard = async (text: string) => {
+          try { await navigator.clipboard.writeText(text) } catch {}
+          try { window.electron?.clipboard?.writeText(text) } catch {}
+        }
+
+        term.attachCustomKeyEventHandler((event: KeyboardEvent) => {
+          if ((event.ctrlKey || event.metaKey) && event.key === 'v') {
+            if (event.type === 'keydown') {
+              readClipboard().then(text => {
+                if (text) term.write(text)
+              })
+            }
+            return false
+          }
+          if ((event.ctrlKey || event.metaKey) && event.key === 'c' && term.hasSelection()) {
+            if (event.type === 'keydown') {
+              const selection = term.getSelection()
+              if (selection) writeClipboard(selection)
+            }
+            return false
+          }
+          return true
+        })
+
+        // Right-click paste
+        containerRef.current.addEventListener('contextmenu', (e) => {
+          e.preventDefault()
+          readClipboard().then(text => {
+            if (text) term.write(text)
+          })
+        })
+
         // Show welcome message with context
         term.writeln('\x1b[1;36m╔══════════════════════════════════════════════════════════╗\x1b[0m')
         term.writeln('\x1b[1;36m║                                                          ║\x1b[0m')

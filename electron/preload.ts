@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, clipboard } from 'electron'
 
 contextBridge.exposeInMainWorld('electron', {
   ipcRenderer: {
@@ -88,5 +88,9 @@ contextBridge.exposeInMainWorld('electron', {
     exportData: (type: string) => ipcRenderer.invoke('terminal:exportData', type),
     addConversation: (message: unknown) => ipcRenderer.invoke('terminal:addConversation', message),
     getConversations: (subjectId?: string) => ipcRenderer.invoke('terminal:getConversations', subjectId),
+  },
+  clipboard: {
+    readText: () => clipboard.readText(),
+    writeText: (text: string) => clipboard.writeText(text),
   },
 })
