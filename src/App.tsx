@@ -31,6 +31,7 @@ const App = () => {
   const [subjects, setSubjects] = useState<Subject[]>([])
   const [showTerminal, setShowTerminal] = useState(false)
   const [terminalWidth, setTerminalWidth] = useState(480)
+  const [refreshKey, setRefreshKey] = useState(0)
   const isResizing = useRef(false)
   const { theme } = useTheme()
 
@@ -47,6 +48,16 @@ const App = () => {
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [])
+
+  // Listen for terminal refresh events
+  useEffect(() => {
+    const handleRefresh = () => {
+      setRefreshKey(k => k + 1)
+      loadSubjects()
+    }
+    window.addEventListener('terminal:refresh', handleRefresh)
+    return () => window.removeEventListener('terminal:refresh', handleRefresh)
   }, [])
 
   const loadSubjects = async () => {
@@ -122,27 +133,27 @@ const App = () => {
 
     switch (activeTab) {
       case 'search':
-        return <SearchPanel subjectId={currentSubjectId} />
+        return <SearchPanel subjectId={currentSubjectId} key={refreshKey} />
       case 'materials':
-        return <MaterialList subjectId={currentSubjectId} />
+        return <MaterialList subjectId={currentSubjectId} key={refreshKey} />
       case 'chat':
-        return <ChatPanel subjectId={currentSubjectId} />
+        return <ChatPanel subjectId={currentSubjectId} key={refreshKey} />
       case 'quiz':
-        return <QuizSession subjectId={currentSubjectId} />
+        return <QuizSession subjectId={currentSubjectId} key={refreshKey} />
       case 'review':
-        return <WrongBook subjectId={currentSubjectId} />
+        return <WrongBook subjectId={currentSubjectId} key={refreshKey} />
       case 'graph':
-        return <KnowledgeGraph subjectId={currentSubjectId} />
+        return <KnowledgeGraph subjectId={currentSubjectId} key={refreshKey} />
       case 'generate':
-        return <DocumentGenerator subjectId={currentSubjectId} />
+        return <DocumentGenerator subjectId={currentSubjectId} key={refreshKey} />
       case 'analysis':
-        return <WeakAnalysis subjectId={currentSubjectId} />
+        return <WeakAnalysis subjectId={currentSubjectId} key={refreshKey} />
       case 'video':
-        return <VideoProduction subjectId={currentSubjectId} />
+        return <VideoProduction subjectId={currentSubjectId} key={refreshKey} />
       case 'article':
-        return <BeautifulArticle subjectId={currentSubjectId} />
+        return <BeautifulArticle subjectId={currentSubjectId} key={refreshKey} />
       default:
-        return <MaterialList subjectId={currentSubjectId} />
+        return <MaterialList subjectId={currentSubjectId} key={refreshKey} />
     }
   }
 
