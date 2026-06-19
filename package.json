@@ -24,6 +24,7 @@
     "mammoth": "^1.8.0",
     "marked": "^14.0.0",
     "node-fetch": "^2.7.0",
+    "node-pty": "^1.1.0",
     "pdf-parse": "^1.1.1",
     "pdfjs-dist": "^4.9.155",
     "react": "^18.3.1",
@@ -51,6 +52,7 @@
   "build": {
     "appId": "com.finalexam.completer",
     "productName": "期末补完计划",
+    "npmRebuild": false,
     "directories": {
       "output": "release"
     },

@@ -1,13 +1,26 @@
 import { app, BrowserWindow, ipcMain, dialog } from 'electron'
 import path from 'path'
 import fs from 'fs'
-import { spawn, ChildProcess } from 'child_process'
 import { registerAIHandlers } from './ipc/aiHandlers'
 import { registerSearchHandlers } from './ipc/searchHandlers'
 import { registerDBHandlers } from './ipc/dbHandlers'
 import { migrateIfNeeded } from './db/store'
 import { registerTerminalGlobalApi } from './terminal/globalApi'
 import { writeContextFile } from './terminal/context'
+
+// node-pty lazy loading
+let pty: typeof import('node-pty') | null = null
+async function loadPty() {
+  if (!pty) {
+    try {
+      pty = await import('node-pty')
+    } catch (err) {
+      console.error('Failed to load node-pty:', err)
+      return null
+    }
+  }
+  return pty
+}
 
 let mainWindow: BrowserWindow | null = null
 
@@ -149,8 +162,8 @@ ipcMain.handle('file:saveFile', async (_event, content: string, defaultName: str
   return { path: result.filePath }
 })
 
-// Terminal with child_process
-let terminalProcess: ChildProcess | null = null
+// Terminal with node-pty
+let terminalProcess: import('node-pty').IPty | null = null
 
 // Scan PATH for CLI tools
 async function detectCliTools(): Promise<string[]> {
@@ -193,6 +206,12 @@ ipcMain.handle('terminal:detectCli', async () => {
 ipcMain.on('terminal:create', async (_event, options?: { cli?: string }) => {
   if (terminalProcess) return
 
+  const Pty = await loadPty()
+  if (!Pty) {
+    mainWindow?.webContents.send('terminal:data', '\x1b[31mFailed to load terminal engine\x1b[0m\r\n')
+    return
+  }
+
   const cwd = getMaterialsDir()
   const shell = process.platform === 'win32' ? 'powershell.exe' : 'bash'
   const shellArgs = process.platform === 'win32' ? ['-NoLogo', '-NoProfile'] : []
@@ -202,30 +221,28 @@ ipcMain.on('terminal:create', async (_event, options?: { cli?: string }) => {
   console.log('Creating terminal with shell:', shell, 'cwd:', cwd, 'cli:', cli)
 
   try {
-    terminalProcess = spawn(shell, shellArgs, {
+    terminalProcess = Pty.spawn(shell, shellArgs, {
+      name: 'xterm-256color',
+      cols: 80,
+      rows: 24,
       cwd,
       env: process.env as Record<string, string>,
-      stdio: ['pipe', 'pipe', 'pipe'],
     })
 
     console.log('Terminal process created successfully')
 
-    terminalProcess.stdout?.on('data', (data: Buffer) => {
-      mainWindow?.webContents.send('terminal:data', data.toString())
+    terminalProcess.onData((data: string) => {
+      mainWindow?.webContents.send('terminal:data', data)
     })
 
-    terminalProcess.stderr?.on('data', (data: Buffer) => {
-      mainWindow?.webContents.send('terminal:data', data.toString())
-    })
-
-    terminalProcess.on('exit', () => {
+    terminalProcess.onExit(() => {
       mainWindow?.webContents.send('terminal:exit')
       terminalProcess = null
     })
 
     if (cli) {
       setTimeout(() => {
-        terminalProcess?.stdin?.write(`${cli}\r`)
+        terminalProcess?.write(`${cli}\r`)
       }, 500)
     }
   } catch (err: any) {
@@ -235,11 +252,13 @@ ipcMain.on('terminal:create', async (_event, options?: { cli?: string }) => {
 })
 
 ipcMain.on('terminal:write', (_event, data: string) => {
-  terminalProcess?.stdin?.write(data)
+  terminalProcess?.write(data)
 })
 
-ipcMain.on('terminal:resize', (_event, _cols: number, _rows: number) => {
-  // child_process doesn't support resize
+ipcMain.on('terminal:resize', (_event, cols: number, rows: number) => {
+  if (terminalProcess) {
+    terminalProcess.resize(cols, rows)
+  }
 })
 
 ipcMain.on('terminal:destroy', () => {
