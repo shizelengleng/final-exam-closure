@@ -1,11 +1,14 @@
 import { useState, useEffect } from 'react'
-import { Upload, Card, Button, Empty, Tag, message, Input, Popover, Modal, Switch } from 'antd'
+import { Upload, Card, Button, Empty, Tag, message, Input, Popover, Modal } from 'antd'
 import {
   InboxOutlined, FilePdfOutlined, FileWordOutlined, FileImageOutlined,
   DeleteOutlined, FileTextOutlined, FolderOutlined, PlusOutlined, CloseOutlined,
-  RobotOutlined, EyeOutlined, StarOutlined, StarFilled,
+  EyeOutlined, StarOutlined, StarFilled, ThunderboltOutlined, SwapOutlined,
 } from '@ant-design/icons'
+import { createWorker } from 'tesseract.js'
 import FileViewer from '../Common/FileViewer'
+import { UNCATEGORIZED_ID } from '../../App'
+import { batchClassify, batchClassifyWithAI, injectBuiltinKeywords } from '../../lib/classifier'
 
 const { Dragger } = Upload
 
@@ -44,17 +47,33 @@ const MaterialList = ({ subjectId }: MaterialListProps) => {
   const [newTagName, setNewTagName] = useState('')
   const [newTagColor, setNewTagColor] = useState('#1677ff')
   const [editingMaterialId, setEditingMaterialId] = useState<string | null>(null)
-  const [autoTag, setAutoTag] = useState(false)
   const [viewingMaterial, setViewingMaterial] = useState<MaterialItem | null>(null)
+  const [allSubjects, setAllSubjects] = useState<Subject[]>([])
+  const isUncategorized = subjectId === UNCATEGORIZED_ID
 
   useEffect(() => {
     loadData()
+    loadSubjects()
   }, [subjectId])
 
   const loadData = async () => {
     const data = await window.electron?.db.list('materials')
     const all = (data as MaterialItem[]) || []
     setMaterials(all.filter((m) => m.subjectId === subjectId))
+  }
+
+  const loadSubjects = async () => {
+    const data = await window.electron?.db.list('subjects')
+    const list = (data as Subject[]) || []
+    // Auto-inject keywords for subjects that don't have them
+    const enriched = list.map((s) => {
+      if (!s.keywords || s.keywords.length === 0) {
+        const injected = injectBuiltinKeywords({ name: s.name })
+        if (injected.length > 0) return { ...s, keywords: injected }
+      }
+      return s
+    })
+    setAllSubjects(enriched)
   }
 
   const handleAddTag = () => {
@@ -122,21 +141,35 @@ const MaterialList = ({ subjectId }: MaterialListProps) => {
   const handleUpload = async (file: File) => {
     const ext = file.name.split('.').pop() || ''
     const typeMap: Record<string, string> = {
-      pdf: 'pdf', docx: 'docx', doc: 'docx', png: 'image', jpg: 'image', jpeg: 'image', md: 'markdown', txt: 'text',
+      pdf: 'pdf', docx: 'docx', doc: 'docx',
+      png: 'image', jpg: 'image', jpeg: 'image', gif: 'image', webp: 'image', bmp: 'image', svg: 'image',
+      md: 'markdown', txt: 'text',
     }
 
-    message.loading({ content: '正在读取文件内容...', key: 'upload', duration: 0 })
-    const content = await readFileContent(file)
+    const isImage = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'].includes(ext)
+
+    message.loading({ content: isImage ? '正在识别图片文字...' : '正在读取文件内容...', key: 'upload', duration: 0 })
+    let content = isImage ? '' : await readFileContent(file)
+
+    // OCR for image files
+    if (isImage) {
+      try {
+        const worker = await createWorker('chi_sim+eng')
+        const { data } = await worker.recognize(file)
+        content = data.text || `[图片] ${file.name}`
+        await worker.terminate()
+      } catch {
+        content = `[图片] ${file.name}`
+      }
+    }
 
     let filePath = ''
-    if (ext === 'pdf' || ext === 'docx' || ext === 'doc') {
-      try {
-        const arrayBuffer = await file.arrayBuffer()
-        const saveResult = await window.electron?.file.saveUpload(file.name, Array.from(new Uint8Array(arrayBuffer)))
-        if (saveResult?.path) filePath = saveResult.path
-      } catch {
-        // Non-critical
-      }
+    try {
+      const arrayBuffer = await file.arrayBuffer()
+      const saveResult = await window.electron?.file.saveUpload(file.name, Array.from(new Uint8Array(arrayBuffer)))
+      if (saveResult?.path) filePath = saveResult.path
+    } catch {
+      // Non-critical
     }
 
     message.destroy('upload')
@@ -160,6 +193,15 @@ const MaterialList = ({ subjectId }: MaterialListProps) => {
 
     const tagName = tags.find((t) => t.id === assignedTag)?.name || '未分类'
     message.success(`已上传: ${file.name} (标签: ${tagName})`)
+
+    // 触发 Wiki 构建（后台静默执行）
+    window.electron?.wiki.getDir(subjectId).then(dir => {
+      if (dir && content) {
+        window.electron?.wiki.buildSource(subjectId, file.name, content)
+          .then(() => window.electron?.wiki.buildWiki(subjectId))
+          .catch(() => {})
+      }
+    })
     return false
   }
 
@@ -178,6 +220,41 @@ const MaterialList = ({ subjectId }: MaterialListProps) => {
       prev.map((m) => (m.id === id ? { ...m, favorite: newFavorite } : m))
     )
     message.success(newFavorite ? '已收藏' : '已取消收藏')
+  }
+
+  const handleReclassify = async () => {
+    if (materials.length === 0) {
+      message.info('没有资料需要重新分类')
+      return
+    }
+    if (allSubjects.length <= 1) {
+      message.info('需要至少两个学科才能重新分类')
+      return
+    }
+
+    const results = await batchClassifyWithAI(
+      materials.map((m) => ({ id: m.id, name: m.name, content: m.content || m.name })),
+      allSubjects
+    )
+
+    // Only move materials that belong to a DIFFERENT subject
+    let moved = 0
+    const summary: Record<string, number> = {}
+    for (const r of results) {
+      if (r.subjectId !== subjectId) {
+        await window.electron?.db.update('materials', r.materialId, { subjectId: r.subjectId })
+        summary[r.subjectName] = (summary[r.subjectName] || 0) + 1
+        moved++
+      }
+    }
+
+    if (moved === 0) {
+      message.info('所有资料已正确分类，无需调整')
+    } else {
+      const summaryText = Object.entries(summary).map(([name, count]) => `${name} ${count} 份`).join('，')
+      message.success(`已将 ${moved} 份资料重新分类到：${summaryText}`)
+      loadData()
+    }
   }
 
   const getTypeIcon = (type: string) => {
@@ -199,6 +276,10 @@ const MaterialList = ({ subjectId }: MaterialListProps) => {
     ? materials
     : selectedTag === 'favorite'
     ? materials.filter((m) => m.favorite)
+    : selectedTag === 'image'
+    ? materials.filter((m) => m.type === 'image')
+    : selectedTag === 'non-image'
+    ? materials.filter((m) => m.type !== 'image')
     : materials.filter((m) => m.tag === selectedTag)
 
   const sorted = [...filtered].sort((a, b) => {
@@ -206,6 +287,127 @@ const MaterialList = ({ subjectId }: MaterialListProps) => {
     if (!a.favorite && b.favorite) return 1
     return 0
   })
+
+  // Uncategorized mode: simple layout with local classify to subjects
+  if (isUncategorized) {
+    const handleLocalClassify = async () => {
+      if (materials.length === 0) {
+        message.info('没有待分类的资料')
+        return
+      }
+      if (allSubjects.length === 0) {
+        message.warning('请先创建至少一个学科')
+        return
+      }
+
+      const results = await batchClassifyWithAI(
+        materials.map((m) => ({ id: m.id, name: m.name, content: m.content || m.name })),
+        allSubjects
+      )
+
+      if (results.length === 0) {
+        message.info('未能匹配到任何学科，可为学科添加更多关键词')
+        return
+      }
+
+      for (const r of results) {
+        await window.electron?.db.update('materials', r.materialId, { subjectId: r.subjectId })
+      }
+
+      // Build summary
+      const summary: Record<string, number> = {}
+      for (const r of results) {
+        summary[r.subjectName] = (summary[r.subjectName] || 0) + 1
+      }
+      const summaryText = Object.entries(summary).map(([name, count]) => `${name} ${count} 份`).join('，')
+      message.success(`已分类 ${results.length} 份：${summaryText}`)
+      loadData()
+    }
+
+    return (
+      <div className="flex flex-col gap-4 p-6 max-w-4xl mx-auto">
+        <div>
+          <h2 className="text-xl font-bold text-gray-800 mb-1">未分类资料</h2>
+          <p className="text-sm text-gray-500">上传文件后，点击一键分类自动分配到各学科（基于关键词匹配）</p>
+        </div>
+
+        <Dragger
+          multiple
+          showUploadList={false}
+          beforeUpload={(file) => { handleUpload(file as unknown as File); return false }}
+          className="bg-white rounded-lg"
+        >
+          <p className="ant-upload-drag-icon"><InboxOutlined /></p>
+          <p className="ant-upload-text">点击或拖拽文件到此区域上传</p>
+          <p className="ant-upload-hint">支持 PDF、Word、图片等，图片会自动识别文字</p>
+        </Dragger>
+
+        {materials.length > 0 && (
+          <div className="flex items-center gap-3">
+            <Button
+              type="primary"
+              icon={<ThunderboltOutlined />}
+              onClick={handleLocalClassify}
+              disabled={allSubjects.length === 0}
+              size="large"
+            >
+              一键分类到学科
+            </Button>
+            {allSubjects.length === 0 && (
+              <span className="text-sm text-gray-400">请先创建学科</span>
+            )}
+            <span className="text-sm text-gray-400 ml-auto">
+              共 {materials.length} 份待分类
+              {allSubjects.length > 0 && ` · ${allSubjects.length} 个学科`}
+            </span>
+          </div>
+        )}
+
+        {materials.length > 0 ? (
+          <div className="space-y-3">
+            {materials.map((item) => (
+              <Card key={item.id} size="small" hoverable className="shadow-sm">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    {item.type === 'image' && item.filePath ? (
+                      <img
+                        src={`file://${item.filePath}`}
+                        alt={item.name}
+                        className="w-10 h-10 rounded object-cover flex-shrink-0"
+                      />
+                    ) : (
+                      getTypeIcon(item.type)
+                    )}
+                    <div>
+                      <p
+                        className="font-medium text-gray-800 hover:text-blue-500 cursor-pointer flex items-center gap-1"
+                        onClick={() => setViewingMaterial(item)}
+                      >
+                        {item.name}
+                        <EyeOutlined className="text-xs text-gray-400" />
+                      </p>
+                      <p className="text-xs text-gray-400">
+                        {item.size} · {item.addedAt}
+                        {item.content && <span className="ml-2 text-green-500">已读取</span>}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Tag color="blue">{item.type}</Tag>
+                    <Button type="text" danger icon={<DeleteOutlined />} onClick={() => handleDelete(item.id)} />
+                  </div>
+                </div>
+              </Card>
+            ))}
+          </div>
+        ) : (
+          <Empty description="还没有资料，上传一份开始吧" className="mt-12" />
+        )}
+
+        <FileViewer material={viewingMaterial} open={!!viewingMaterial} onClose={() => setViewingMaterial(null)} />
+      </div>
+    )
+  }
 
   return (
     <div className="flex h-full gap-4 p-6">
@@ -244,6 +446,28 @@ const MaterialList = ({ subjectId }: MaterialListProps) => {
             <span className="text-xs text-gray-400 ml-auto">{materials.filter((m) => m.favorite).length}</span>
           </div>
 
+          <div
+            className={`flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer transition-colors ${
+              selectedTag === 'image' ? 'bg-green-50 text-green-600' : 'hover:bg-gray-50'
+            }`}
+            onClick={() => setSelectedTag('image')}
+          >
+            <FileImageOutlined />
+            <span className="text-sm">图片</span>
+            <span className="text-xs text-gray-400 ml-auto">{materials.filter((m) => m.type === 'image').length}</span>
+          </div>
+
+          <div
+            className={`flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer transition-colors ${
+              selectedTag === 'non-image' ? 'bg-orange-50 text-orange-600' : 'hover:bg-gray-50'
+            }`}
+            onClick={() => setSelectedTag('non-image')}
+          >
+            <FileTextOutlined />
+            <span className="text-sm">非图片</span>
+            <span className="text-xs text-gray-400 ml-auto">{materials.filter((m) => m.type !== 'image').length}</span>
+          </div>
+
           {tags.map((tag) => {
             const count = materials.filter((m) => m.tag === tag.id).length
             return (
@@ -279,6 +503,17 @@ const MaterialList = ({ subjectId }: MaterialListProps) => {
           <p className="text-sm text-gray-500">上传 PDF、Word、Markdown 等复习资料</p>
         </div>
 
+        {materials.length > 0 && (
+          <Button
+            icon={<SwapOutlined />}
+            onClick={handleReclassify}
+            disabled={allSubjects.length <= 1}
+            size="small"
+          >
+            重新分类
+          </Button>
+        )}
+
         <Dragger
           multiple
           showUploadList={false}
@@ -288,7 +523,7 @@ const MaterialList = ({ subjectId }: MaterialListProps) => {
           <p className="ant-upload-drag-icon"><InboxOutlined /></p>
           <p className="ant-upload-text">点击或拖拽文件到此区域上传</p>
           <p className="ant-upload-hint">
-            支持 PDF、DOCX、Markdown 格式，当前标签：
+            支持 PDF、DOCX、Markdown、图片格式，当前标签：
             {selectedTag === 'all' ? '全部' : getTagName(selectedTag)}
           </p>
         </Dragger>
@@ -298,13 +533,23 @@ const MaterialList = ({ subjectId }: MaterialListProps) => {
             <p className="text-sm text-gray-500">
               共 {sorted.length} 份资料
               {selectedTag === 'favorite' && ' (收藏)'}
-              {selectedTag !== 'all' && selectedTag !== 'favorite' && ` (标签: ${getTagName(selectedTag)})`}
+              {selectedTag === 'image' && ' (图片)'}
+              {selectedTag === 'non-image' && ' (非图片)'}
+              {selectedTag !== 'all' && selectedTag !== 'favorite' && selectedTag !== 'image' && selectedTag !== 'non-image' && ` (标签: ${getTagName(selectedTag)})`}
             </p>
             {sorted.map((item) => (
               <Card key={item.id} size="small" hoverable className="shadow-sm">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
-                    {getTypeIcon(item.type)}
+                    {item.type === 'image' && item.filePath ? (
+                      <img
+                        src={`file://${item.filePath}`}
+                        alt={item.name}
+                        className="w-10 h-10 rounded object-cover flex-shrink-0"
+                      />
+                    ) : (
+                      getTypeIcon(item.type)
+                    )}
                     <div>
                       <p
                         className="font-medium text-gray-800 hover:text-blue-500 cursor-pointer flex items-center gap-1"

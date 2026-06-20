@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
-import { Input, Button, Spin, Empty, Tag, Collapse } from 'antd'
-import { SendOutlined, RobotOutlined, UserOutlined, FileTextOutlined, BookOutlined } from '@ant-design/icons'
+import { Input, Button, Spin, Empty, Tag, Collapse, message, Modal } from 'antd'
+import { SendOutlined, RobotOutlined, UserOutlined, FileTextOutlined, BookOutlined, SaveOutlined } from '@ant-design/icons'
 import MaterialPicker from '../Common/MaterialPicker'
 import type { Material } from '../Common/MaterialPicker'
 
@@ -101,14 +101,26 @@ const ChatPanel = ({ subjectId }: ChatPanelProps) => {
     }
 
     try {
-      const relevant = findRelevantMaterials(text)
       let systemContext = ''
 
-      if (relevant.length > 0) {
-        systemContext = '以下是与用户问题相关的学习资料，请优先基于这些资料回答：\n\n'
-        for (const mat of relevant) {
-          const snippet = mat.content.substring(0, 3000)
-          systemContext += `【${mat.name}】\n${snippet}\n\n---\n\n`
+      // 优先读取 Wiki 内容
+      const wikiDir = await window.electron?.wiki.getDir(subjectId)
+      if (wikiDir) {
+        const wikiContent = await window.electron?.wiki.readAllPages(subjectId)
+        if (wikiContent) {
+          systemContext = '以下是该学科的 Wiki 知识库内容，请基于这些内容回答：\n\n' + wikiContent.substring(0, 12000)
+        }
+      }
+
+      // Wiki 不可用时，使用原始资料
+      if (!systemContext) {
+        const relevant = findRelevantMaterials(text)
+        if (relevant.length > 0) {
+          systemContext = '以下是与用户问题相关的学习资料，请优先基于这些资料回答：\n\n'
+          for (const mat of relevant) {
+            const snippet = mat.content.substring(0, 3000)
+            systemContext += `【${mat.name}】\n${snippet}\n\n---\n\n`
+          }
         }
       }
 
@@ -164,6 +176,40 @@ const ChatPanel = ({ subjectId }: ChatPanelProps) => {
     } finally {
       setLoading(false)
     }
+  }
+
+  const handleSaveToWiki = async (msg: ChatMessage) => {
+    if (!msg.content || msg.role !== 'assistant') return
+
+    let title = ''
+    Modal.confirm({
+      title: '保存到 Wiki',
+      content: (
+        <div>
+          <p className="mb-2 text-sm text-gray-600">将此回答保存为 Wiki 综合页：</p>
+          <Input
+            placeholder="页面标题，如：AI答疑-如何理解微积分"
+            defaultValue={msg.content.substring(0, 30).replace(/[\\/:*?"<>|]/g, '')}
+            onChange={(e) => { title = e.target.value }}
+            id="wiki-save-title"
+          />
+        </div>
+      ),
+      onOk: async () => {
+        const input = document.getElementById('wiki-save-title') as HTMLInputElement
+        const finalTitle = input?.value?.trim() || msg.content.substring(0, 30).replace(/[\\/:*?"<>|]/g, '')
+        if (!finalTitle) {
+          message.warning('请输入标题')
+          return
+        }
+        const result = await window.electron?.wiki.saveQueryResult(subjectId, finalTitle, msg.content)
+        if (result?.success) {
+          message.success('已保存到 Wiki')
+        } else {
+          message.error(result?.error || '保存失败，可能未配置 Wiki 目录')
+        }
+      },
+    })
   }
 
   return (
@@ -231,6 +277,15 @@ const ChatPanel = ({ subjectId }: ChatPanelProps) => {
                     )}
 
                     <div className="text-xs opacity-40 mt-1">{msg.timestamp}</div>
+
+                    {msg.role === 'assistant' && (
+                      <button
+                        onClick={() => handleSaveToWiki(msg)}
+                        className="text-xs text-blue-400 hover:text-blue-600 mt-1 flex items-center gap-1 transition-colors"
+                      >
+                        <SaveOutlined /> 保存到 Wiki
+                      </button>
+                    )}
                   </div>
 
                   {msg.role === 'user' && (

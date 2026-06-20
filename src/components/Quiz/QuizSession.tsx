@@ -46,20 +46,33 @@ const QuizSession = ({ subjectId }: QuizSessionProps) => {
   const loadData = async () => {
     const data = await window.electron?.db.list('materials')
     const all = (data as Material[]) || []
-    setAllMaterials(all.filter((m) => (m as Record<string, unknown>).subjectId === subjectId))
+    const subjectMaterials = all.filter((m) => (m as Record<string, unknown>).subjectId === subjectId)
+    setAllMaterials(subjectMaterials)
+    // 默认全选当前学科的所有资料
+    setSelectedMaterialIds(subjectMaterials.map((m) => m.id))
+    setSelectedMaterials(subjectMaterials)
   }
 
   const currentQuestion = questions[currentIndex]
   const progress = questions.length > 0 ? ((currentIndex + 1) / questions.length) * 100 : 0
 
   const handleGenerate = async () => {
-    // 组合内容：选中的资料 + 用户自定义内容
+    // 优先读取 Wiki 内容，降级读取原始资料
     let content = ''
-    if (selectedMaterials.length > 0) {
+    const wikiDir = await window.electron?.wiki.getDir(subjectId)
+    if (wikiDir) {
+      const synthesis = await window.electron?.wiki.getSynthesis(subjectId)
+      const concepts = await window.electron?.wiki.readAllPages(subjectId, 'concept')
+      content = synthesis + '\n\n---\n\n' + concepts
+    }
+    if (!content && selectedMaterials.length > 0) {
       content = selectedMaterials
-        .map((m) => `【${m.name}】\n${m.content.substring(0, 3000)}`)
+        .map((m) => {
+          const cleanName = m.name.replace(/\.(pdf|docx?|txt|md)$/i, '')
+          return `【${cleanName}】\n${m.content.substring(0, 5000)}`
+        })
         .join('\n\n---\n\n')
-        .substring(0, 12000)
+        .substring(0, 15000)
     }
     if (customContent.trim()) {
       content = content ? `${content}\n\n补充要求：${customContent}` : customContent
@@ -291,7 +304,7 @@ const QuizSession = ({ subjectId }: QuizSessionProps) => {
   }
 
   return (
-    <div className="space-y-6 max-w-2xl">
+    <div className="space-y-6 max-w-2xl p-6">
       <div className="flex justify-between items-center">
         <h2 className="text-xl font-bold text-gray-800">答题中</h2>
         <div className="flex gap-2">

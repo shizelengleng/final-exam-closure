@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { Modal, Input, Select, Button, message, Space, Tabs, Table, Switch, Popconfirm, Tag, Spin } from 'antd'
 import {
   PlusOutlined, DeleteOutlined, EditOutlined, RobotOutlined, UserOutlined, SendOutlined,
-  GithubOutlined, FolderOutlined, InfoCircleOutlined,
+  GithubOutlined, FolderOutlined, InfoCircleOutlined, BookOutlined,
 } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 
@@ -72,10 +72,17 @@ const SettingsModal = ({ open, onClose }: SettingsModalProps) => {
   const [configLoading, setConfigLoading] = useState(false)
   const [testLoading, setTestLoading] = useState(false)
 
+  // Wiki config state
+  const [wikiSubjects, setWikiSubjects] = useState<Subject[]>([])
+  const [wikiSubjectId, setWikiSubjectId] = useState<string>('')
+  const [wikiDir, setWikiDir] = useState<string | null>(null)
+  const [wikiLoading, setWikiLoading] = useState(false)
+
   useEffect(() => {
     if (open) {
       loadSources()
       loadAIConfig()
+      loadWikiSubjects()
     }
   }, [open])
 
@@ -98,6 +105,74 @@ const SettingsModal = ({ open, onClose }: SettingsModalProps) => {
     if (config) {
       setProvider(config.provider)
       setBaseUrl(config.baseUrl || '')
+    }
+  }
+
+  const loadWikiSubjects = async () => {
+    const data = await window.electron?.db.list('subjects')
+    const list = (data as Subject[]) || []
+    setWikiSubjects(list)
+    if (list.length > 0 && !wikiSubjectId) {
+      setWikiSubjectId(list[0].id)
+    }
+  }
+
+  useEffect(() => {
+    if (wikiSubjectId && open) {
+      window.electron?.wiki.getDir(wikiSubjectId).then(dir => setWikiDir(dir))
+    }
+  }, [wikiSubjectId, open])
+
+  const handleSelectWikiDir = async () => {
+    if (!wikiSubjectId) return
+    setWikiLoading(true)
+    try {
+      const result = await window.electron?.wiki.initDir(wikiSubjectId)
+      if (result?.success) {
+        setWikiDir(result.wikiDir || null)
+        message.success('Wiki 目录已配置')
+      }
+    } catch {
+      message.error('配置失败')
+    } finally {
+      setWikiLoading(false)
+    }
+  }
+
+  const handleRebuildWiki = async () => {
+    if (!wikiSubjectId) return
+    setWikiLoading(true)
+    try {
+      const result = await window.electron?.wiki.buildWiki(wikiSubjectId)
+      if (result?.success) {
+        message.success('Wiki 重新构建完成')
+      } else {
+        message.error(result?.error || '构建失败')
+      }
+    } catch {
+      message.error('构建失败')
+    } finally {
+      setWikiLoading(false)
+    }
+  }
+
+  // Wiki lint
+  const [lintResults, setLintResults] = useState<{ issues: WikiLintIssue[]; summary: string } | null>(null)
+  const [lintLoading, setLintLoading] = useState(false)
+
+  const handleLintWiki = async () => {
+    if (!wikiSubjectId) return
+    setLintLoading(true)
+    try {
+      const result = await window.electron?.wiki.lint(wikiSubjectId)
+      setLintResults(result)
+      if (result.issues.length === 0) {
+        message.success('Wiki 健康检查通过，没有发现问题')
+      }
+    } catch {
+      message.error('健康检查失败')
+    } finally {
+      setLintLoading(false)
     }
   }
 
@@ -542,6 +617,87 @@ const SettingsModal = ({ open, onClose }: SettingsModalProps) => {
               测试连接
             </Button>
           </div>
+        </Space>
+      ),
+    },
+    {
+      key: 'wiki',
+      label: (
+        <span className="flex items-center gap-1">
+          <BookOutlined />
+          Wiki 知识库
+        </span>
+      ),
+      children: (
+        <Space direction="vertical" className="w-full" size="middle">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">选择学科</label>
+            <Select
+              value={wikiSubjectId || undefined}
+              onChange={setWikiSubjectId}
+              className="w-full"
+              placeholder="选择要配置 Wiki 的学科"
+              options={wikiSubjects.map(s => ({ value: s.id, label: s.name }))}
+            />
+          </div>
+          <div className="bg-gray-50 rounded-lg p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-gray-700">
+                  Wiki 目录：{wikiDir || '未配置'}
+                </p>
+                <p className="text-xs text-gray-400 mt-1">
+                  上传资料后自动生成结构化 Wiki 页面，AI 工具基于 Wiki 内容工作
+                </p>
+              </div>
+              <Button onClick={handleSelectWikiDir} loading={wikiLoading} disabled={!wikiSubjectId}>
+                {wikiDir ? '重新选择' : '选择目录'}
+              </Button>
+            </div>
+          </div>
+          {wikiDir && (
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+              <p className="text-sm text-blue-700">
+                Wiki 已配置，上传资料后会自动生成结构化页面。
+              </p>
+              <p className="text-xs text-blue-600 mt-1">
+                目录位置：{wikiDir}
+              </p>
+              <div className="flex gap-2 mt-2">
+                <Button size="small" loading={wikiLoading} onClick={handleRebuildWiki}>
+                  重新构建 Wiki
+                </Button>
+                <Button size="small" loading={lintLoading} onClick={handleLintWiki}>
+                  健康检查 (Lint)
+                </Button>
+              </div>
+            </div>
+          )}
+          {lintResults && (
+            <div className="bg-gray-50 rounded-lg p-3">
+              <p className="text-sm font-medium text-gray-700 mb-2">{lintResults.summary}</p>
+              {lintResults.issues.length > 0 ? (
+                <div className="space-y-1 max-h-48 overflow-auto">
+                  {lintResults.issues.map((issue, i) => (
+                    <div key={i} className="text-xs flex items-start gap-2">
+                      <Tag color={
+                        issue.type === 'orphan' ? 'orange' :
+                        issue.type === 'missing_page' ? 'red' :
+                        issue.type === 'stale' ? 'blue' : 'default'
+                      } className="!text-xs !mt-0 flex-shrink-0">
+                        {issue.type === 'orphan' ? '孤立' :
+                         issue.type === 'missing_page' ? '断链' :
+                         issue.type === 'stale' ? '过时' : '缺引用'}
+                      </Tag>
+                      <span className="text-gray-600">{issue.message}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs text-green-600">所有页面健康，没有发现问题</p>
+              )}
+            </div>
+          )}
         </Space>
       ),
     },

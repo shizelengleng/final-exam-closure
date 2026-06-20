@@ -162,7 +162,7 @@ const VideoProduction = ({ subjectId }: VideoProductionProps) => {
           <div className="bg-white rounded-xl border border-gray-200 p-4 max-h-64 overflow-auto">
             <MaterialPicker
               materials={allMaterials}
-              selectedIds={selectedIds}
+              value={selectedIds}
               onChange={(ids) => {
                 setSelectedIds(ids)
                 setSelectedMaterials(allMaterials.filter((m) => ids.includes(m.id)))

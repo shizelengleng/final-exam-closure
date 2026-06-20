@@ -9,21 +9,25 @@ import QuizSession from './components/Quiz/QuizSession'
 import WrongBook from './components/Review/WrongBook'
 import KnowledgeGraph from './components/KnowledgeGraph/KnowledgeGraph'
 import ChatPanel from './components/Chat/ChatPanel'
-import DocumentGenerator from './components/Document/DocumentGenerator'
+
 import WeakAnalysis from './components/Analysis/WeakAnalysis'
 import SearchPanel from './components/Search/SearchPanel'
 import VideoProduction from './components/Skills/VideoProduction'
 import BeautifulArticle from './components/Skills/BeautifulArticle'
+import WikiBrowser from './components/Wiki/WikiBrowser'
 import { useTheme } from './contexts/ThemeContext'
+import { injectBuiltinKeywords } from './lib/classifier'
 
-type SubjectTab = 'search' | 'materials' | 'chat' | 'quiz' | 'review' | 'graph' | 'generate' | 'analysis' | 'video' | 'article'
+type SubjectTab = 'search' | 'materials' | 'chat' | 'quiz' | 'review' | 'graph' | 'analysis' | 'video' | 'article' | 'wiki'
 
 const DEFAULT_SUBJECTS: Subject[] = [
-  { id: 'math', name: '数学', color: '#1677ff' },
-  { id: 'cs', name: '计算机', color: '#52c41a' },
-  { id: 'physics', name: '物理', color: '#722ed1' },
-  { id: 'english', name: '英语', color: '#faad14' },
+  { id: 'math', name: '数学', color: '#1677ff', keywords: ['数学', '微积分', '线性代数', '概率', '统计', '极限', '导数', '积分', '矩阵', '方程', '函数', '几何', '代数', '三角'] },
+  { id: 'cs', name: '计算机', color: '#52c41a', keywords: ['计算机', '编程', '算法', '数据结构', '操作系统', '网络', '数据库', 'Python', 'Java', 'C++', '软件', '程序', '代码', '开发'] },
+  { id: 'physics', name: '物理', color: '#722ed1', keywords: ['物理', '力学', '电磁', '热学', '光学', '量子', '牛顿', '能量', '速度', '加速度', '力', '运动', '电', '磁'] },
+  { id: 'english', name: '英语', color: '#faad14', keywords: ['英语', 'English', '语法', '阅读', '写作', '翻译', '词汇', '听力', '四级', '六级', '作文', '完形', '阅读理解'] },
 ]
+
+export const UNCATEGORIZED_ID = '__uncategorized__'
 
 const App = () => {
   const [currentSubjectId, setCurrentSubjectId] = useState<string | null>(null)
@@ -67,7 +71,15 @@ const App = () => {
       await window.electron?.db.write('subjects', DEFAULT_SUBJECTS)
       setSubjects(DEFAULT_SUBJECTS)
     } else {
-      setSubjects(list)
+      // Auto-inject keywords for subjects created before the dictionary was added
+      const enriched = list.map((s) => {
+        if (!s.keywords || s.keywords.length === 0) {
+          const injected = injectBuiltinKeywords({ name: s.name })
+          if (injected.length > 0) return { ...s, keywords: injected }
+        }
+        return s
+      })
+      setSubjects(enriched)
     }
   }
 
@@ -80,8 +92,8 @@ const App = () => {
     setActiveTab('materials')
   }, [])
 
-  const handleAddSubject = useCallback(async (name: string, color: string, year?: string) => {
-    const newSubject: Subject = { id: `sub_${Date.now()}`, name, color, year }
+  const handleAddSubject = useCallback(async (name: string, color: string, year?: string, keywords?: string[]) => {
+    const newSubject: Subject = { id: `sub_${Date.now()}`, name, color, year, keywords }
     const updated = [...subjects, newSubject]
     await window.electron?.db.write('subjects', updated)
     setSubjects(updated)
@@ -93,6 +105,12 @@ const App = () => {
     setSubjects(updated)
     if (currentSubjectId === id) setCurrentSubjectId(null)
   }, [subjects, currentSubjectId])
+
+  const handleUpdateSubject = useCallback(async (id: string, updates: Partial<Pick<Subject, 'name' | 'color' | 'year' | 'keywords'>>) => {
+    const updated = subjects.map((s) => s.id === id ? { ...s, ...updates } : s)
+    await window.electron?.db.write('subjects', updated)
+    setSubjects(updated)
+  }, [subjects])
 
   const handleResizeStart = (e: React.MouseEvent) => {
     e.preventDefault()
@@ -117,7 +135,9 @@ const App = () => {
     document.addEventListener('mouseup', onMouseUp)
   }
 
-  const currentSubject = subjects.find((s) => s.id === currentSubjectId)
+  const currentSubject = currentSubjectId === UNCATEGORIZED_ID
+    ? { id: UNCATEGORIZED_ID, name: '未分类', color: '#8c8c8c' }
+    : subjects.find((s) => s.id === currentSubjectId) || null
 
   const renderContent = () => {
     if (!currentSubjectId) {
@@ -144,14 +164,14 @@ const App = () => {
         return <WrongBook subjectId={currentSubjectId} key={refreshKey} />
       case 'graph':
         return <KnowledgeGraph subjectId={currentSubjectId} key={refreshKey} />
-      case 'generate':
-        return <DocumentGenerator subjectId={currentSubjectId} key={refreshKey} />
       case 'analysis':
         return <WeakAnalysis subjectId={currentSubjectId} key={refreshKey} />
       case 'video':
         return <VideoProduction subjectId={currentSubjectId} key={refreshKey} />
       case 'article':
         return <BeautifulArticle subjectId={currentSubjectId} key={refreshKey} />
+      case 'wiki':
+        return <WikiBrowser subjectId={currentSubjectId} key={refreshKey} />
       default:
         return <MaterialList subjectId={currentSubjectId} key={refreshKey} />
     }
@@ -168,6 +188,7 @@ const App = () => {
         onSelectTab={setActiveTab}
         onAddSubject={handleAddSubject}
         onDeleteSubject={handleDeleteSubject}
+        onUpdateSubject={handleUpdateSubject}
       />
       <div className="flex-1 flex flex-col min-w-0">
         <Header
@@ -175,11 +196,11 @@ const App = () => {
           showTerminal={showTerminal}
           onToggleTerminal={() => setShowTerminal((prev) => !prev)}
         />
-        {currentSubjectId && (
+        {currentSubjectId && currentSubjectId !== UNCATEGORIZED_ID && (
           <TabBar activeTab={activeTab} onTabChange={setActiveTab} />
         )}
         <div className="flex-1 flex min-h-0">
-          <main className="flex-1 overflow-auto min-h-0">
+          <main className="flex-1 overflow-auto min-h-0 pl-6">
             {renderContent()}
           </main>
 

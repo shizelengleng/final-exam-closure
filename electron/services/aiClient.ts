@@ -2,7 +2,7 @@ import fetch from 'node-fetch'
 
 export type AIProvider = 'deepseek' | 'mimo' | 'claude-code'
 
-interface AIConfig {
+export interface AIConfig {
   provider: AIProvider
   apiKey: string
   baseUrl: string
@@ -19,48 +19,91 @@ const PROVIDER_CONFIG: Record<Exclude<AIProvider, 'claude-code'>, { baseUrl: str
   },
 }
 
-async function callClaudeCLI(prompt: string): Promise<string> {
-  try {
-    // Use stdin pipe to avoid shell escaping and CLI file-access sandbox issues
-    const { execSync } = require('child_process')
-    const result = execSync(
-      'claude -p - --output-format json --no-session-persistence',
-      { input: prompt, timeout: 120000, maxBuffer: 10 * 1024 * 1024, encoding: 'utf-8' }
-    )
-    const parsed = JSON.parse(result.trim())
-    return parsed.result || ''
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
-    if (msg.includes('command not found') || msg.includes('ENOENT')) {
-      throw new Error('未找到 claude CLI，请先安装 Claude Code: npm install -g @anthropic-ai/claude-code')
-    }
-    throw new Error(`Claude CLI 调用失败: ${msg}`)
-  }
+const DEFAULT_CLI_SYSTEM_INSTRUCTION = `【系统指令】你是一个考试出题 AI。你正在通过 API 被调用，不要尝试访问任何文件或目录。
+下面的内容是用户提供的学习资料文本（不是文件路径），请基于这些文本内容完成任务。
+请直接返回 JSON，不要返回其他任何内容，不要尝试读取文件。`
+
+async function callClaudeCLI(prompt: string, systemInstruction?: string): Promise<string> {
+  const { spawn } = require('child_process')
+  const instruction = systemInstruction || DEFAULT_CLI_SYSTEM_INSTRUCTION
+  const wrappedPrompt = `${instruction}
+
+【用户请求】
+${prompt}`
+
+  return new Promise((resolve, reject) => {
+    const child = spawn('claude', ['-p', '-', '--output-format', 'json', '--no-session-persistence'], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      timeout: 120000,
+    })
+
+    let stdout = ''
+    let stderr = ''
+
+    child.stdout.on('data', (data: Buffer) => { stdout += data.toString() })
+    child.stderr.on('data', (data: Buffer) => { stderr += data.toString() })
+
+    child.stdin.write(wrappedPrompt)
+    child.stdin.end()
+
+    child.on('close', (code: number | null) => {
+      if (code !== 0 && code !== null) {
+        const msg = stderr || ''
+        if (msg.includes('command not found') || msg.includes('ENOENT')) {
+          reject(new Error('未找到 claude CLI，请先安装 Claude Code: npm install -g @anthropic-ai/claude-code'))
+        } else {
+          reject(new Error(`Claude CLI 调用失败 (exit ${code}): ${msg.substring(0, 300)}`))
+        }
+        return
+      }
+      try {
+        const parsed = JSON.parse(stdout.trim())
+        resolve(parsed.result || '')
+      } catch {
+        // 如果不是 JSON，直接返回原始输出（可能是 Markdown）
+        const raw = stdout.trim()
+        if (raw.length > 0) {
+          resolve(raw)
+        } else {
+          reject(new Error(`Claude CLI 返回为空。stderr: ${stderr.substring(0, 200)}`))
+        }
+      }
+    })
+
+    child.on('error', (err: Error) => {
+      if (err.message.includes('ENOENT')) {
+        reject(new Error('未找到 claude CLI，请先安装 Claude Code: npm install -g @anthropic-ai/claude-code'))
+      } else {
+        reject(new Error(`Claude CLI 启动失败: ${err.message}`))
+      }
+    })
+  })
 }
 
-interface ChatMessage {
+export interface ChatMessage {
   role: 'user' | 'assistant' | 'system'
-  content: string
+  content: string | ContentPart[]
 }
 
-async function callAI(
+export interface ContentPart {
+  type: 'text' | 'image_url'
+  text?: string
+  image_url?: { url: string }
+}
+
+export async function callAI(
   config: AIConfig,
   messages: ChatMessage[],
-  options: { temperature?: number; maxTokens?: number } = {}
+  options: { temperature?: number; maxTokens?: number; systemInstruction?: string } = {}
 ): Promise<string> {
   if (config.provider === 'claude-code') {
     const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user')
     if (!lastUserMsg) throw new Error('No user message')
-    // For CLI, combine system + conversation into a single prompt
-    const systemMsg = messages.find((m) => m.role === 'system')
-    const conversationParts = messages
-      .filter((m) => m.role !== 'system')
-      .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
-      .join('\n\n')
-    const fullPrompt = systemMsg
-      ? `${systemMsg.content}\n\n${conversationParts}`
-      : conversationParts
-    return callClaudeCLI(fullPrompt)
+    // For CLI, extract the user text directly — no "User:" prefix
+    const userText = typeof lastUserMsg.content === 'string'
+      ? lastUserMsg.content
+      : lastUserMsg.content.filter(p => p.type === 'text').map(p => p.text).join('')
+    return callClaudeCLI(userText, options.systemInstruction)
   }
 
   const providerConfig = PROVIDER_CONFIG[config.provider as Exclude<AIProvider, 'claude-code'>]
@@ -123,41 +166,109 @@ function buildPrompt(params: GenerateQuestionParams): string {
   const typeLabel = QUESTION_TYPE_LABELS[params.type]
   const difficultyLabel = { easy: '简单', medium: '中等', hard: '困难' }[params.difficulty]
 
-  return `你是一个专业的期末考试出题专家。请根据以下学习资料，生成${params.count}道${typeLabel}。
+  const difficultyInstructions: Record<string, string> = {
+    easy: '侧重基本概念和定义的记忆性考察，选项差异明显',
+    medium: '侧重理解和应用，需要结合材料分析才能作答，干扰项具有一定迷惑性',
+    hard: '侧重综合分析和深度理解，需要多步推理或跨知识点关联，干扰项高度相似',
+  }
 
-难度要求：${difficultyLabel}
-题目类型：${typeLabel}
+  return `你是一个专业的期末考试出题专家。请根据以下学习资料，严格生成恰好 ${params.count} 道${typeLabel}。
 
-学习资料：
-${params.content.substring(0, 8000)}
+## 质量要求
+1. 每道题必须基于学习资料内容，不要凭空编造
+2. 选项设计：错误选项必须具有合理迷惑性，不能出现明显不相关或荒谬的选项
+3. 题目之间不能重复考察同一个知识点，要覆盖资料中的不同内容
+4. 题目表述清晰准确，避免歧义
+5. 解析要说明为什么选这个答案，以及为什么其他选项不对
 
+## 难度标准
+难度等级：${difficultyLabel}
+${difficultyInstructions[params.difficulty] || ''}
+
+## 学习资料
+${sanitizeContentForAI(params.content.substring(0, 12000))}
+
+## 输出格式
 请严格按以下 JSON 格式返回，不要包含任何其他文字：
 [
   {
     "content": "题目内容",
     "options": [
       {"value": "A", "label": "A. 选项内容"},
-      {"value": "B", "label": "B. 选项内容"}
+      {"value": "B", "label": "B. 选项内容"},
+      {"value": "C", "label": "C. 选项内容"},
+      {"value": "D", "label": "D. 选项内容"}
     ],
     "answer": "A",
-    "explanation": "解析说明"
+    "explanation": "解析说明：为什么选A，以及其他选项为什么不对"
   }
 ]
 
-注意：
-- 判断题的选项固定为：{"value": "true", "label": "A. 正确"}，{"value": "false", "label": "B. 错误"}
+## 格式规则
+- 选择题必须有 4 个选项（A/B/C/D），多选题同理
+- 判断题选项固定为：{"value": "true", "label": "A. 正确"}，{"value": "false", "label": "B. 错误"}
 - 简答题和分析题的 options 设为空数组，answer 为参考答案
 - 多选题的 answer 用逗号分隔，如 "A,B,C"
+- 必须返回恰好 ${params.count} 道题，不要多也不要少
 - 确保返回合法的 JSON 数组`
 }
 
-function parseQuestions(raw: string, type?: string): GeneratedQuestion[] {
-  // 提取 JSON 部分（兼容 markdown code block）
-  const jsonMatch = raw.match(/\[[\s\S]*\]/)
-  if (!jsonMatch) throw new Error('AI 返回格式错误，无法解析题目')
+function cleanJsonString(raw: string): string {
+  // 先尝试从 markdown code block 中提取
+  const codeBlockMatch = raw.match(/```(?:json)?\s*([\s\S]*?)```/)
+  let text = codeBlockMatch ? codeBlockMatch[1].trim() : raw
 
-  const parsed = JSON.parse(jsonMatch[0])
-  return parsed.map((q: Record<string, unknown>, i: number) => ({
+  // 找到第一个 [ 到最后一个 ] 之间的内容
+  const firstBracket = text.indexOf('[')
+  const lastBracket = text.lastIndexOf(']')
+  if (firstBracket === -1 || lastBracket === -1) return text
+  text = text.substring(firstBracket, lastBracket + 1)
+
+  // 修复字符串值中的未转义控制字符
+  text = text.replace(/"((?:[^"\\]|\\.)*)"/g, (match) => {
+    return match
+      .replace(/\n/g, '\\n')
+      .replace(/\r/g, '\\r')
+      .replace(/\t/g, '\\t')
+  })
+
+  return text
+}
+
+function sanitizeContentForAI(content: string): string {
+  // 清理资料内容中的特殊字符，防止干扰 AI 输出 JSON
+  return content
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '') // 移除控制字符
+    .replace(/\\/g, '\\\\')  // 转义反斜杠
+    .replace(/"/g, "'")       // 双引号替换为单引号，避免干扰 JSON
+}
+
+function parseQuestions(raw: string, type?: string): GeneratedQuestion[] {
+  console.log('[parseQuestions] raw length:', raw.length, 'preview:', raw.substring(0, 300))
+  const cleaned = cleanJsonString(raw)
+  console.log('[parseQuestions] cleaned length:', cleaned.length, 'preview:', cleaned.substring(0, 300))
+
+  let parsed: Record<string, unknown>[]
+  try {
+    parsed = JSON.parse(cleaned)
+  } catch (e) {
+    console.log('[parseQuestions] JSON.parse failed:', (e as Error).message)
+    console.log('[parseQuestions] cleaned content:', cleaned.substring(0, 500))
+    // 尝试更宽松的提取：逐个找 {...} 对象
+    const objectMatches: Record<string, unknown>[] = []
+    const objRegex = /\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/g
+    let m: RegExpExecArray | null
+    while ((m = objRegex.exec(cleaned)) !== null) {
+      try {
+        objectMatches.push(JSON.parse(m[0]))
+      } catch { /* skip invalid objects */ }
+    }
+    console.log('[parseQuestions] fallback found', objectMatches.length, 'objects')
+    if (objectMatches.length === 0) throw new Error(`AI 返回格式错误，无法解析题目。原始内容前200字：${raw.substring(0, 200)}`)
+    parsed = objectMatches
+  }
+
+  return parsed.map((q, i) => ({
     id: `ai_${Date.now()}_${i}`,
     content: q.content as string,
     options: (q.options as { value: string; label: string }[]) || [],
@@ -172,8 +283,24 @@ export async function generateQuestions(
   params: GenerateQuestionParams
 ): Promise<GeneratedQuestion[]> {
   const prompt = buildPrompt(params)
-  const content = await callAI(config, [{ role: 'user', content: prompt }], { temperature: 0.7, maxTokens: 4096 })
-  return parseQuestions(content, params.type)
+  const maxRetries = 2
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const content = await callAI(config, [{ role: 'user', content: prompt }], { temperature: 0.5, maxTokens: 8192 })
+    const questions = parseQuestions(content, params.type)
+
+    if (questions.length >= params.count) {
+      return questions.slice(0, params.count)
+    }
+
+    // 数量不够，最后一次尝试直接返回已有结果
+    if (attempt === maxRetries) {
+      if (questions.length > 0) return questions
+      throw new Error('AI 返回的题目数量不足，请重试')
+    }
+  }
+
+  throw new Error('生成题目失败，请重试')
 }
 
 export interface GraphConcept {
@@ -265,10 +392,14 @@ ${content}
 }
 
 function parseGraph(raw: string): GraphResult {
-  const jsonMatch = raw.match(/\{[\s\S]*\}/)
-  if (!jsonMatch) throw new Error('AI 返回格式错误，无法解析知识图谱')
+  const cleaned = cleanJsonString(raw)
 
-  const parsed = JSON.parse(jsonMatch[0])
+  // 找到最外层的 { ... }
+  const firstBrace = cleaned.indexOf('{')
+  const lastBrace = cleaned.lastIndexOf('}')
+  if (firstBrace === -1 || lastBrace === -1) throw new Error('AI 返回格式错误，无法解析知识图谱')
+
+  const parsed = JSON.parse(cleaned.substring(firstBrace, lastBrace + 1))
   return {
     nodes: (parsed.nodes || []).map((n: Record<string, string>, i: number) => ({
       id: n.id || `c${i + 1}`,
@@ -308,19 +439,28 @@ export async function categorizeMaterial(
   config: AIConfig,
   materialName: string,
   materialContent: string,
-  existingCategories: string[]
+  existingCategories: string[],
+  imageBase64?: string
 ): Promise<string> {
   const catList = existingCategories.join('、')
-  const prompt = `你是一个资料分类助手。请根据以下资料的文件名和内容摘要，判断它属于哪个学科分类。
+  const textPart = `你是一个资料分类助手。请根据以下资料的文件名和内容，判断它属于哪个学科分类。
 
 已有分类：${catList}
 
 资料文件名：${materialName}
-内容摘要：${materialContent.substring(0, 500)}
+${imageBase64 ? '这是一张图片，请根据图片内容判断分类。' : `内容摘要：${materialContent.substring(0, 500)}`}
 
 请只返回分类名称（必须是已有分类之一），不要返回其他内容。`
 
-  const result = await callAI(config, [{ role: 'user', content: prompt }], { temperature: 0.3, maxTokens: 50 })
+  const userContent: ContentPart[] = [{ type: 'text', text: textPart }]
+  if (imageBase64) {
+    userContent.push({
+      type: 'image_url',
+      image_url: { url: `data:image/jpeg;base64,${imageBase64}` },
+    })
+  }
+
+  const result = await callAI(config, [{ role: 'user', content: imageBase64 ? userContent : textPart }], { temperature: 0.3, maxTokens: 50 })
   const trimmed = result.trim()
   const matched = existingCategories.find((c) => trimmed.includes(c))
   return matched || existingCategories[0] || 'default'
@@ -356,10 +496,12 @@ ${matSummary}
 只返回 JSON，不要其他内容。`
 
   const content = await callAI(config, [{ role: 'user', content: prompt }], { temperature: 0.3, maxTokens: 1024 })
-  const jsonMatch = content.match(/\{[\s\S]*\}/)
-  if (!jsonMatch) throw new Error('AI 返回格式错误')
+  const cleaned = cleanJsonString(content)
+  const firstBrace = cleaned.indexOf('{')
+  const lastBrace = cleaned.lastIndexOf('}')
+  if (firstBrace === -1 || lastBrace === -1) throw new Error('AI 返回格式错误')
 
-  const parsed = JSON.parse(jsonMatch[0])
+  const parsed = JSON.parse(cleaned.substring(firstBrace, lastBrace + 1))
   return {
     materialIds: parsed.materialIds || materialList.map((m) => m.id),
     instruction: parsed.instruction || userMessage,
@@ -414,10 +556,12 @@ ${sourceList}
 只返回 JSON，不要其他内容。`
 
   const content = await callAI(config, [{ role: 'user', content: prompt }], { temperature: 0.3, maxTokens: 1024 })
-  const jsonMatch = content.match(/\{[\s\S]*\}/)
-  if (!jsonMatch) throw new Error('AI 返回格式错误')
+  const cleaned = cleanJsonString(content)
+  const firstBrace = cleaned.indexOf('{')
+  const lastBrace = cleaned.lastIndexOf('}')
+  if (firstBrace === -1 || lastBrace === -1) throw new Error('AI 返回格式错误')
 
-  const parsed = JSON.parse(jsonMatch[0])
+  const parsed = JSON.parse(cleaned.substring(firstBrace, lastBrace + 1))
   return {
     action: parsed.action || 'list',
     source: parsed.source,
@@ -498,15 +642,26 @@ export async function generateDocument(
 export async function reviseDocument(
   config: AIConfig,
   originalContent: string,
-  userMessage: string
+  userMessage: string,
+  materials?: { name: string; content: string }[]
 ): Promise<string> {
+  let materialContext = ''
+  if (materials && materials.length > 0) {
+    materialContext = '\n\n## 参考资料（用于确保修改内容准确）\n'
+    for (const mat of materials) {
+      materialContext += `\n### ${mat.name}\n${mat.content.substring(0, 3000)}\n`
+    }
+  }
+
   const prompt = `你是一位专业的学习资料整理专家。用户对你生成的复习文档有修改意见，请根据用户要求修改文档。
 
 当前文档内容：
 ${originalContent.substring(0, 12000)}
+${materialContext}
 
 用户修改要求：${userMessage}
 
+请根据用户要求修改文档。如果有参考资料，请参考资料内容确保修改的准确性。
 请返回修改后的完整 Markdown 文档。保持原有的高质量排版（表格优先、箭头链、高频考点标记等）。
 只返回修改后的完整 Markdown，不要包含其他说明。`
 

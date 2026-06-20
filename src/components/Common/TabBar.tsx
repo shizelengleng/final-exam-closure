@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { DownOutlined } from '@ant-design/icons'
 import { useTheme } from '../../contexts/ThemeContext'
 
-type SubjectTab = 'search' | 'materials' | 'chat' | 'quiz' | 'review' | 'graph' | 'generate' | 'analysis' | 'video' | 'article'
+type SubjectTab = 'search' | 'materials' | 'chat' | 'quiz' | 'review' | 'graph' | 'analysis' | 'video' | 'article' | 'wiki'
 
 interface TabGroup {
   id: string
@@ -28,7 +28,6 @@ const TAB_GROUPS: TabGroup[] = [
     tabs: [
       { key: 'chat', label: 'AI 答疑' },
       { key: 'quiz', label: 'AI 出题' },
-      { key: 'generate', label: '文档生成' },
       { key: 'video', label: '视频制作' },
       { key: 'article', label: '漂亮文章' },
     ],
@@ -41,6 +40,14 @@ const TAB_GROUPS: TabGroup[] = [
       { key: 'review', label: '错题本' },
       { key: 'graph', label: '知识图谱' },
       { key: 'analysis', label: '薄弱分析' },
+    ],
+  },
+  {
+    id: 'wiki',
+    label: 'Wiki',
+    color: '#eb2f96',
+    tabs: [
+      { key: 'wiki', label: '知识库浏览' },
     ],
   },
 ]

@@ -11,74 +11,83 @@ function getDataDir(): string {
   return dataDir
 }
 
-function ensureDir(dir: string) {
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true })
+async function ensureDir(dir: string) {
+  try {
+    await fs.promises.access(dir)
+  } catch {
+    await fs.promises.mkdir(dir, { recursive: true })
   }
 }
 
 function getFilePath(collection: string): string {
   const dir = getDataDir()
-  ensureDir(dir)
   return path.join(dir, `${collection}.json`)
 }
 
-export function readCollection<T>(collection: string): T[] {
+export async function readCollection<T>(collection: string): Promise<T[]> {
   const filePath = getFilePath(collection)
-  if (!fs.existsSync(filePath)) return []
-  const raw = fs.readFileSync(filePath, 'utf-8')
-  return JSON.parse(raw) as T[]
+  try {
+    const raw = await fs.promises.readFile(filePath, 'utf-8')
+    return JSON.parse(raw) as T[]
+  } catch {
+    return []
+  }
 }
 
-export function writeCollection<T>(collection: string, data: T[]): void {
+export async function writeCollection<T>(collection: string, data: T[]): Promise<void> {
   const filePath = getFilePath(collection)
-  ensureDir(getDataDir())
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8')
+  await ensureDir(getDataDir())
+  await fs.promises.writeFile(filePath, JSON.stringify(data, null, 2), 'utf-8')
 }
 
-export function appendItem<T extends { id: string }>(collection: string, item: T): T {
-  const items = readCollection<T>(collection)
+export async function appendItem<T extends { id: string }>(collection: string, item: T): Promise<T> {
+  const items = await readCollection<T>(collection)
   items.unshift(item)
-  writeCollection(collection, items)
+  await writeCollection(collection, items)
   return item
 }
 
-export function updateItem<T extends { id: string }>(
+export async function updateItem<T extends { id: string }>(
   collection: string,
   id: string,
   updates: Partial<T>
-): T | null {
-  const items = readCollection<T>(collection)
+): Promise<T | null> {
+  const items = await readCollection<T>(collection)
   const index = items.findIndex((item) => item.id === id)
   if (index === -1) return null
   items[index] = { ...items[index], ...updates }
-  writeCollection(collection, items)
+  await writeCollection(collection, items)
   return items[index]
 }
 
-export function deleteItem<T extends { id: string }>(collection: string, id: string): boolean {
-  const items = readCollection<T>(collection)
+export async function deleteItem<T extends { id: string }>(collection: string, id: string): Promise<boolean> {
+  const items = await readCollection<T>(collection)
   const filtered = items.filter((item) => item.id !== id)
   if (filtered.length === items.length) return false
-  writeCollection(collection, filtered)
+  await writeCollection(collection, filtered)
   return true
 }
 
-export function getItem<T extends { id: string }>(collection: string, id: string): T | null {
-  const items = readCollection<T>(collection)
+export async function getItem<T extends { id: string }>(collection: string, id: string): Promise<T | null> {
+  const items = await readCollection<T>(collection)
   return items.find((item) => item.id === id) || null
 }
 
-export function migrateIfNeeded() {
+export async function migrateIfNeeded() {
   const dir = getDataDir()
   const subjectsPath = path.join(dir, 'subjects.json')
   const categoriesPath = path.join(dir, 'categories.json')
 
-  // If subjects.json already exists, no migration needed
-  if (fs.existsSync(subjectsPath)) return
+  try {
+    await fs.promises.access(subjectsPath)
+    return
+  } catch {
+    // subjects.json doesn't exist
+  }
 
-  // If categories.json exists, rename it to subjects.json
-  if (fs.existsSync(categoriesPath)) {
-    fs.renameSync(categoriesPath, subjectsPath)
+  try {
+    await fs.promises.rename(categoriesPath, subjectsPath)
+  } catch {
+    // categories.json doesn't exist either
   }
 }

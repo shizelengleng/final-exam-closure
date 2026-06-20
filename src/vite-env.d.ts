@@ -5,6 +5,8 @@ interface Subject {
   name: string
   color: string
   year?: string
+  keywords?: string[]
+  wikiDir?: string
 }
 
 interface SearchResult {
@@ -34,6 +36,42 @@ interface SubjectDocument {
   content: string
   template: string
   createdAt: string
+}
+
+interface WikiPage {
+  name: string
+  type: 'concept' | 'source' | 'synthesis'
+  path: string
+  subjectId: string
+  created: string
+  updated: string
+}
+
+interface WikiBuildStatus {
+  subjectId: string
+  phase: 'idle' | 'sources' | 'concepts' | 'synthesis' | 'done'
+  progress: number
+  message: string
+}
+
+interface WikiLintIssue {
+  type: 'orphan' | 'missing_ref' | 'stale' | 'missing_page'
+  page: string
+  message: string
+}
+
+interface WikiAPI {
+  initDir: (subjectId: string, dirPath?: string) => Promise<{ success: boolean; error?: string; wikiDir?: string }>
+  getDir: (subjectId: string) => Promise<string | null>
+  buildSource: (subjectId: string, materialName: string, materialContent: string) => Promise<{ success: boolean; error?: string }>
+  buildWiki: (subjectId: string) => Promise<{ success: boolean; error?: string }>
+  listPages: (subjectId: string, type?: string) => Promise<WikiPage[]>
+  readPage: (subjectId: string, pageName: string) => Promise<string>
+  readAllPages: (subjectId: string, type?: string) => Promise<string>
+  getSynthesis: (subjectId: string) => Promise<string>
+  lint: (subjectId: string) => Promise<{ issues: WikiLintIssue[]; summary: string }>
+  saveQueryResult: (subjectId: string, title: string, content: string, sources?: string[]) => Promise<{ success: boolean; error?: string; path?: string }>
+  deletePage: (subjectId: string, pageName: string, pageType: string) => Promise<{ success: boolean; error?: string }>
 }
 
 interface ElectronAPI {
@@ -72,14 +110,14 @@ interface ElectronAPI {
       nodes: { id: string; name: string; description: string; category: string; difficulty: string }[]
       edges: { from: string; to: string; type: string; label: string }[]
     }>
-    categorizeMaterial: (name: string, content: string, categories: string[]) => Promise<string>
+    categorizeMaterial: (name: string, content: string, categories: string[], imageBase64?: string) => Promise<string>
     selectMaterialsForGraph: (message: string, materials: { id: string; name: string; content: string }[]) => Promise<{
       materialIds: string[]
       instruction: string
     }>
     manageSources: (message: string) => Promise<{ action: string; source?: SearchSource; sourceId?: string; message: string }>
     generateDocument: (materials: { name: string; content: string }[], instruction: string, template: string) => Promise<{ title: string; content: string }>
-    reviseDocument: (originalContent: string, userMessage: string) => Promise<string>
+    reviseDocument: (originalContent: string, userMessage: string, materials?: { name: string; content: string }[]) => Promise<string>
   }
   search: {
     query: (keyword: string, sourceIds?: string[]) => Promise<SearchResult[]>
@@ -89,6 +127,7 @@ interface ElectronAPI {
     updateSource: (id: string, updates: Partial<SearchSource>) => Promise<SearchSource | null>
     deleteSource: (id: string) => Promise<{ success: boolean }>
     toggleSource: (id: string) => Promise<SearchSource | null>
+    fetchAsMarkdown: (url: string) => Promise<string>
   }
   db: {
     list: (collection: string) => Promise<unknown[]>
@@ -102,7 +141,15 @@ interface ElectronAPI {
     readPdf: (buffer: number[]) => Promise<string>
     readDocx: (buffer: number[]) => Promise<string>
     saveFile: (content: string, defaultName: string) => Promise<{ path?: string; cancelled?: boolean }>
+    saveUpload: (fileName: string, buffer: number[]) => Promise<{ path?: string }>
+    readAsBase64: (filePath: string) => Promise<string | null>
+    readDocxFormatted: (buffer: number[]) => Promise<string>
+    exportPdf: (content: string, defaultName: string) => Promise<{ path?: string; cancelled?: boolean; error?: string }>
   }
+  shell: {
+    openExternal: (url: string) => Promise<void>
+  }
+  wiki: WikiAPI
   terminal: {
     create: (options?: { cli?: string }) => void
     write: (data: string) => void

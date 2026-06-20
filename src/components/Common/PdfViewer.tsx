@@ -20,7 +20,7 @@ const PdfViewer = ({ file, open }: PdfViewerProps) => {
   const [pdf, setPdf] = useState<any>(null)
   const [currentPage, setCurrentPage] = useState(1)
   const [totalPages, setTotalPages] = useState(0)
-  const [scale, setScale] = useState(1.2)
+  const [scale, setScale] = useState(1.5) // Start at 1.5 for better initial quality
   const [rotation, setRotation] = useState(0)
   const [loading, setLoading] = useState(false)
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -60,18 +60,29 @@ const PdfViewer = ({ file, open }: PdfViewerProps) => {
     if (!pdf || !canvasRef.current) return
 
     const page = await pdf.getPage(pageNum)
-    const viewport = page.getViewport({ scale, rotation })
     const canvas = canvasRef.current
     const ctx = canvas.getContext('2d')
     if (!ctx) return
 
+    const dpr = window.devicePixelRatio || 1
+    // Use higher render resolution at lower zoom levels to keep text sharp
+    const renderMultiplier = scale <= 1.0 ? 2.5 : scale <= 1.5 ? 2.0 : 1.5
+    const renderScale = scale * renderMultiplier * dpr
+    const viewport = page.getViewport({ scale: renderScale, rotation })
+
     canvas.height = viewport.height
     canvas.width = viewport.width
+
+    // CSS size shows the page at the user-requested scale
+    const displayWidth = page.getViewport({ scale, rotation }).width
+    const displayHeight = page.getViewport({ scale, rotation }).height
+    canvas.style.width = `${displayWidth}px`
+    canvas.style.height = `${displayHeight}px`
 
     await page.render({ canvasContext: ctx, viewport }).promise
   }, [pdf, scale, rotation])
 
-  const handleZoomIn = () => setScale((s) => Math.min(s + 0.2, 3))
+  const handleZoomIn = () => setScale((s) => Math.min(s + 0.2, 4))
   const handleZoomOut = () => setScale((s) => Math.max(s - 0.2, 0.4))
   const handlePrevPage = () => setCurrentPage((p) => Math.max(1, p - 1))
   const handleNextPage = () => setCurrentPage((p) => Math.min(totalPages, p + 1))
@@ -87,7 +98,7 @@ const PdfViewer = ({ file, open }: PdfViewerProps) => {
         <div className="flex items-center gap-2">
           <Button size="small" icon={<ZoomOutOutlined />} onClick={handleZoomOut} disabled={scale <= 0.4} />
           <span className="text-xs text-gray-600 min-w-[60px] text-center">{Math.round(scale * 100)}%</span>
-          <Button size="small" icon={<ZoomInOutlined />} onClick={handleZoomIn} disabled={scale >= 3} />
+          <Button size="small" icon={<ZoomInOutlined />} onClick={handleZoomIn} disabled={scale >= 4} />
           <div className="w-px h-4 bg-gray-300 mx-1" />
           <Button size="small" icon={<RotateLeftOutlined />} onClick={handleRotateLeft} />
           <Button size="small" icon={<RotateRightOutlined />} onClick={handleRotateRight} />
@@ -128,7 +139,6 @@ const PdfViewer = ({ file, open }: PdfViewerProps) => {
           <canvas
             ref={canvasRef}
             className="shadow-lg"
-            style={{ maxWidth: '100%' }}
           />
         )}
       </div>

@@ -1,9 +1,10 @@
-import { app, BrowserWindow, ipcMain, dialog } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron'
 import path from 'path'
 import fs from 'fs'
 import { registerAIHandlers } from './ipc/aiHandlers'
 import { registerSearchHandlers } from './ipc/searchHandlers'
 import { registerDBHandlers } from './ipc/dbHandlers'
+import { registerWikiHandlers } from './ipc/wikiHandlers'
 import { migrateIfNeeded } from './db/store'
 import { registerTerminalGlobalApi } from './terminal/globalApi'
 import { writeContextFile } from './terminal/context'
@@ -31,6 +32,7 @@ function createWindow() {
     minWidth: 900,
     minHeight: 600,
     title: '期末补完计划',
+    icon: path.join(__dirname, process.env.VITE_DEV_SERVER_URL ? '../public' : '../dist', 'icon.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -52,11 +54,12 @@ function createWindow() {
   })
 }
 
-app.whenReady().then(() => {
-  migrateIfNeeded()
-  registerAIHandlers()
+app.whenReady().then(async () => {
+  await migrateIfNeeded()
+  await registerAIHandlers()
   registerSearchHandlers()
-  registerDBHandlers()
+  await registerDBHandlers()
+  registerWikiHandlers()
   registerTerminalGlobalApi()
   writeContextFile()
   createWindow()
@@ -110,12 +113,33 @@ ipcMain.handle('file:readDocx', async (_event, buffer: number[]) => {
 
 ipcMain.handle('file:getAsFile', async (_event, filePath: string) => {
   try {
-    if (fs.existsSync(filePath)) {
-      return fs.readFileSync(filePath)
-    }
+    await fs.promises.access(filePath)
+    return await fs.promises.readFile(filePath)
+  } catch {
     return null
-  } catch (err) {
-    console.error('File read error:', err)
+  }
+})
+
+// Read file as base64 data URL (for images in Electron)
+ipcMain.handle('file:readAsBase64', async (_event, filePath: string) => {
+  try {
+    await fs.promises.access(filePath)
+    const buffer = await fs.promises.readFile(filePath)
+    const ext = path.extname(filePath).toLowerCase()
+    const mimeMap: Record<string, string> = {
+      '.png': 'image/png',
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.gif': 'image/gif',
+      '.bmp': 'image/bmp',
+      '.webp': 'image/webp',
+      '.svg': 'image/svg+xml',
+      '.ico': 'image/x-icon',
+    }
+    const mime = mimeMap[ext] || 'application/octet-stream'
+    const base64 = buffer.toString('base64')
+    return `data:${mime};base64,${base64}`
+  } catch {
     return null
   }
 })
@@ -123,9 +147,9 @@ ipcMain.handle('file:getAsFile', async (_event, filePath: string) => {
 ipcMain.handle('file:saveUpload', async (_event, fileName: string, buffer: number[]) => {
   try {
     const dataDir = path.join(app.getPath('userData'), 'uploads')
-    if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true })
+    await fs.promises.mkdir(dataDir, { recursive: true })
     const filePath = path.join(dataDir, `${Date.now()}_${fileName}`)
-    fs.writeFileSync(filePath, Buffer.from(buffer))
+    await fs.promises.writeFile(filePath, Buffer.from(buffer))
     return { path: filePath }
   } catch (err) {
     console.error('Save upload error:', err)
@@ -151,15 +175,85 @@ ipcMain.handle('file:saveFile', async (_event, content: string, defaultName: str
     try {
       const { convertMdToDocx } = await import('./services/docxConverter')
       const buffer = await convertMdToDocx(content)
-      fs.writeFileSync(result.filePath, buffer)
+      await fs.promises.writeFile(result.filePath, buffer)
     } catch (err) {
       console.error('DOCX conversion error:', err)
-      fs.writeFileSync(result.filePath, content, 'utf-8')
+      await fs.promises.writeFile(result.filePath, content, 'utf-8')
     }
   } else {
-    fs.writeFileSync(result.filePath, content, 'utf-8')
+    await fs.promises.writeFile(result.filePath, content, 'utf-8')
   }
   return { path: result.filePath }
+})
+
+// Shell: 打开外部链接
+ipcMain.handle('shell:openExternal', async (_event, url: string) => {
+  await shell.openExternal(url)
+})
+
+// DOCX 格式化预览
+ipcMain.handle('file:readDocxFormatted', async (_event, buffer: number[]) => {
+  try {
+    const mammoth = await import('mammoth')
+    const result = await mammoth.convertToHtml({ buffer: Buffer.from(buffer) })
+    return result.value
+  } catch (err) {
+    console.error('DOCX formatted parse error:', err)
+    return ''
+  }
+})
+
+// 导出 PDF
+ipcMain.handle('file:exportPdf', async (_event, content: string, defaultName: string) => {
+  const win = BrowserWindow.getFocusedWindow()
+  const result = await dialog.showSaveDialog(win!, {
+    defaultPath: defaultName,
+    filters: [{ name: 'PDF', extensions: ['pdf'] }],
+  })
+  if (result.canceled || !result.filePath) return { cancelled: true }
+
+  try {
+    const { marked } = await import('marked')
+    const html = marked.parse(content) as string
+
+    const pdfWin = new BrowserWindow({
+      show: false,
+      width: 800,
+      height: 1100,
+      webPreferences: { offscreen: true },
+    })
+
+    const fullHtml = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><style>
+  body { font-family: "Microsoft YaHei", sans-serif; max-width: 800px; margin: 0 auto; padding: 40px; line-height: 1.8; color: #333; }
+  table { border-collapse: collapse; width: 100%; margin: 16px 0; }
+  th, td { border: 1px solid #ddd; padding: 8px 12px; text-align: left; }
+  th { background: #f5f5f5; font-weight: bold; }
+  h1 { font-size: 24px; border-bottom: 2px solid #333; padding-bottom: 8px; }
+  h2 { font-size: 20px; margin-top: 24px; }
+  h3 { font-size: 16px; }
+  code { background: #f5f5f5; padding: 2px 4px; border-radius: 3px; }
+  pre { background: #f5f5f5; padding: 12px; border-radius: 6px; overflow-x: auto; }
+</style></head><body>${html}</body></html>`
+
+    await pdfWin.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(fullHtml)}`)
+    const pdfBuffer = await pdfWin.webContents.printToPDF({
+      printBackground: true,
+      pageSize: 'A4',
+      margins: {
+        top: 0.6,
+        bottom: 0.6,
+        left: 0.6,
+        right: 0.6,
+      },
+    })
+    await fs.promises.writeFile(result.filePath, pdfBuffer)
+    pdfWin.close()
+    return { path: result.filePath }
+  } catch (err) {
+    console.error('PDF export error:', err)
+    return { error: String(err) }
+  }
 })
 
 // Terminal with node-pty

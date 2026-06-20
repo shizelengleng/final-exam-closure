@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { Button, Input, Spin, Empty, message, Select, Tag, Collapse } from 'antd'
-import { DownloadOutlined, RobotOutlined, SendOutlined, UserOutlined, FileTextOutlined } from '@ant-design/icons'
+import { DownloadOutlined, RobotOutlined, SendOutlined, UserOutlined, FileTextOutlined, FilePdfOutlined, SaveOutlined } from '@ant-design/icons'
 import { marked } from 'marked'
 import MaterialPicker from '../Common/MaterialPicker'
 import type { Material } from '../Common/MaterialPicker'
@@ -116,7 +116,9 @@ const BeautifulArticle = ({ subjectId }: BeautifulArticleProps) => {
     setChatLoading(true)
 
     try {
-      const revised = await window.electron?.ai.reviseDocument(articleContent, text)
+      // Pass selected materials as context for revision
+      const mats = selectedMaterials.map((m) => ({ name: m.name, content: m.content }))
+      const revised = await window.electron?.ai.reviseDocument(articleContent, text, mats.length > 0 ? mats : undefined)
       if (revised) {
         setArticleContent(revised)
         const assistantMsg: ChatMsg = {
@@ -136,6 +138,32 @@ const BeautifulArticle = ({ subjectId }: BeautifulArticleProps) => {
       setChatMessages((prev) => [...prev, errorMsg])
     } finally {
       setChatLoading(false)
+    }
+  }
+
+  const handleExportPdf = async () => {
+    if (!articleContent) {
+      message.warning('请先生成文章')
+      return
+    }
+    const defaultName = `${articleTitle || '漂亮文章'}.pdf`
+    const result = await window.electron?.file.exportPdf(articleContent, defaultName)
+    if (result?.path) message.success(`已导出 PDF: ${result.path}`)
+    else if (result?.cancelled) message.info('已取消')
+    else if (result?.error) message.error(`导出失败: ${result.error}`)
+  }
+
+  const handleSaveToWiki = async () => {
+    if (!articleContent) {
+      message.warning('请先生成文章')
+      return
+    }
+    const title = articleTitle || '漂亮文章'
+    const result = await window.electron?.wiki.saveQueryResult(subjectId, title, articleContent)
+    if (result?.success) {
+      message.success('已保存到 Wiki')
+    } else {
+      message.error(result?.error || '保存失败，可能未配置 Wiki 目录')
     }
   }
 
@@ -162,7 +190,7 @@ const BeautifulArticle = ({ subjectId }: BeautifulArticleProps) => {
           <div className="bg-white rounded-xl border border-gray-200 p-4 max-h-64 overflow-auto">
             <MaterialPicker
               materials={allMaterials}
-              selectedIds={selectedIds}
+              value={selectedIds}
               onChange={(ids) => {
                 setSelectedIds(ids)
                 setSelectedMaterials(allMaterials.filter((m) => ids.includes(m.id)))
@@ -217,17 +245,31 @@ const BeautifulArticle = ({ subjectId }: BeautifulArticleProps) => {
           <div className="flex-1 overflow-auto bg-white rounded-xl shadow-sm p-6">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-bold text-gray-800">{articleTitle}</h3>
-              <Button
-                icon={<DownloadOutlined />}
-                onClick={handleSaveArticle}
-                type="primary"
-                style={{
-                  background: 'linear-gradient(135deg, #ec4899 0%, #8b5cf6 100%)',
-                  border: 'none',
-                }}
-              >
-                保存到学科
-              </Button>
+              <div className="flex gap-2">
+                <Button
+                  icon={<DownloadOutlined />}
+                  onClick={handleSaveArticle}
+                >
+                  保存到学科
+                </Button>
+                <Button
+                  icon={<SaveOutlined />}
+                  onClick={handleSaveToWiki}
+                >
+                  保存到 Wiki
+                </Button>
+                <Button
+                  icon={<FilePdfOutlined />}
+                  onClick={handleExportPdf}
+                  type="primary"
+                  style={{
+                    background: 'linear-gradient(135deg, #ec4899 0%, #8b5cf6 100%)',
+                    border: 'none',
+                  }}
+                >
+                  导出 PDF
+                </Button>
+              </div>
             </div>
             <div
               className="prose max-w-none"

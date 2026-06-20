@@ -98,32 +98,43 @@ const KnowledgeGraph = ({ subjectId }: KnowledgeGraphProps) => {
     setLoading(true)
 
     try {
-      // 使用用户选择的资料
-      const selectedMats = allMaterials.filter((m) => selectedMaterialIds.includes(m.id))
-
-      if (selectedMats.length === 0) {
-        const reply: ChatMsg = {
-          id: `msg_${Date.now() + 1}`,
-          role: 'assistant',
-          content: '请先在右侧面板选择要生成图谱的资料，然后告诉我你想要什么样的知识图谱。',
-        }
-        setChatMessages((prev) => [...prev, reply])
-        return
-      }
-
-      // 分块处理大资料
+      // 优先读取 Wiki 内容
       const allNodes: ConceptNode[] = []
       const allEdges: { from: string; to: string; type: string; label: string }[] = []
       const seenNodeNames = new Set<string>()
 
       const chunks: { name: string; content: string }[] = []
-      for (const mat of selectedMats) {
-        const content = mat.content
-        if (content.length <= CHUNK_SIZE) {
-          chunks.push({ name: mat.name, content })
-        } else {
-          for (let i = 0; i < content.length; i += CHUNK_SIZE) {
-            chunks.push({ name: `${mat.name} (第${Math.floor(i / CHUNK_SIZE) + 1}部分)`, content: content.substring(i, i + CHUNK_SIZE) })
+      const wikiDir = await window.electron?.wiki.getDir(subjectId)
+
+      if (wikiDir) {
+        const wikiContent = await window.electron?.wiki.readAllPages(subjectId, 'concept')
+        if (wikiContent) {
+          for (let i = 0; i < wikiContent.length; i += CHUNK_SIZE) {
+            chunks.push({ name: `Wiki 知识点 (第${Math.floor(i / CHUNK_SIZE) + 1}部分)`, content: wikiContent.substring(i, i + CHUNK_SIZE) })
+          }
+        }
+      }
+
+      // Wiki 不可用时，使用原始资料
+      if (chunks.length === 0) {
+        const selectedMats = allMaterials.filter((m) => selectedMaterialIds.includes(m.id))
+        if (selectedMats.length === 0) {
+          const reply: ChatMsg = {
+            id: `msg_${Date.now() + 1}`,
+            role: 'assistant',
+            content: '请先在右侧面板选择要生成图谱的资料，然后告诉我你想要什么样的知识图谱。',
+          }
+          setChatMessages((prev) => [...prev, reply])
+          return
+        }
+        for (const mat of selectedMats) {
+          const content = mat.content
+          if (content.length <= CHUNK_SIZE) {
+            chunks.push({ name: mat.name, content })
+          } else {
+            for (let i = 0; i < content.length; i += CHUNK_SIZE) {
+              chunks.push({ name: `${mat.name} (第${Math.floor(i / CHUNK_SIZE) + 1}部分)`, content: content.substring(i, i + CHUNK_SIZE) })
+            }
           }
         }
       }

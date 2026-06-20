@@ -22,15 +22,15 @@ contextBridge.exposeInMainWorld('electron', {
     chat: (message: string) => ipcRenderer.invoke('ai:chat', message),
     generateGraph: (subject: string) => ipcRenderer.invoke('ai:generateGraph', subject),
     generateGraphFromContent: (content: string) => ipcRenderer.invoke('ai:generateGraphFromContent', content),
-    categorizeMaterial: (name: string, content: string, categories: string[]) =>
-      ipcRenderer.invoke('ai:categorizeMaterial', name, content, categories),
+    categorizeMaterial: (name: string, content: string, categories: string[], imageBase64?: string) =>
+      ipcRenderer.invoke('ai:categorizeMaterial', name, content, categories, imageBase64),
     selectMaterialsForGraph: (message: string, materials: { id: string; name: string; content: string }[]) =>
       ipcRenderer.invoke('ai:selectMaterialsForGraph', message, materials),
     manageSources: (message: string) => ipcRenderer.invoke('ai:manageSources', message),
     generateDocument: (materials: { name: string; content: string }[], instruction: string, template: string) =>
       ipcRenderer.invoke('ai:generateDocument', materials, instruction, template),
-    reviseDocument: (originalContent: string, userMessage: string) =>
-      ipcRenderer.invoke('ai:reviseDocument', originalContent, userMessage),
+    reviseDocument: (originalContent: string, userMessage: string, materials?: { name: string; content: string }[]) =>
+      ipcRenderer.invoke('ai:reviseDocument', originalContent, userMessage, materials),
   },
   search: {
     query: (keyword: string, sourceIds?: string[]) =>
@@ -43,6 +43,7 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke('search:updateSource', id, updates),
     deleteSource: (id: string) => ipcRenderer.invoke('search:deleteSource', id),
     toggleSource: (id: string) => ipcRenderer.invoke('search:toggleSource', id),
+    fetchAsMarkdown: (url: string) => ipcRenderer.invoke('search:fetchAsMarkdown', url),
   },
   db: {
     list: (collection: string) => ipcRenderer.invoke('db:list', collection),
@@ -58,7 +59,26 @@ contextBridge.exposeInMainWorld('electron', {
     readDocx: (buffer: number[]) => ipcRenderer.invoke('file:readDocx', buffer),
     saveFile: (content: string, defaultName: string) => ipcRenderer.invoke('file:saveFile', content, defaultName),
     getAsFile: (filePath: string) => ipcRenderer.invoke('file:getAsFile', filePath),
+    readAsBase64: (filePath: string) => ipcRenderer.invoke('file:readAsBase64', filePath),
     saveUpload: (fileName: string, buffer: number[]) => ipcRenderer.invoke('file:saveUpload', fileName, buffer),
+    readDocxFormatted: (buffer: number[]) => ipcRenderer.invoke('file:readDocxFormatted', buffer),
+    exportPdf: (content: string, defaultName: string) => ipcRenderer.invoke('file:exportPdf', content, defaultName),
+  },
+  shell: {
+    openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
+  },
+  wiki: {
+    initDir: (subjectId: string, dirPath?: string) => ipcRenderer.invoke('wiki:initDir', subjectId, dirPath),
+    getDir: (subjectId: string) => ipcRenderer.invoke('wiki:getDir', subjectId),
+    buildSource: (subjectId: string, materialName: string, materialContent: string) => ipcRenderer.invoke('wiki:buildSource', subjectId, materialName, materialContent),
+    buildWiki: (subjectId: string) => ipcRenderer.invoke('wiki:buildWiki', subjectId),
+    listPages: (subjectId: string, type?: string) => ipcRenderer.invoke('wiki:listPages', subjectId, type),
+    readPage: (subjectId: string, pageName: string) => ipcRenderer.invoke('wiki:readPage', subjectId, pageName),
+    readAllPages: (subjectId: string, type?: string) => ipcRenderer.invoke('wiki:readAllPages', subjectId, type),
+    getSynthesis: (subjectId: string) => ipcRenderer.invoke('wiki:getSynthesis', subjectId),
+    lint: (subjectId: string) => ipcRenderer.invoke('wiki:lint', subjectId),
+    saveQueryResult: (subjectId: string, title: string, content: string, sources?: string[]) => ipcRenderer.invoke('wiki:saveQueryResult', subjectId, title, content, sources),
+    deletePage: (subjectId: string, pageName: string, pageType: string) => ipcRenderer.invoke('wiki:deletePage', subjectId, pageName, pageType),
   },
   terminal: {
     create: (options?: { cli?: string }) => ipcRenderer.send('terminal:create', options),

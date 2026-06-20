@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { Button, Input, Spin, Empty, message, Select, Tag, Collapse } from 'antd'
-import { DownloadOutlined, RobotOutlined, SendOutlined, UserOutlined, EditOutlined } from '@ant-design/icons'
+import { DownloadOutlined, RobotOutlined, SendOutlined, UserOutlined, EditOutlined, SaveOutlined, FilePdfOutlined } from '@ant-design/icons'
 import { marked } from 'marked'
 import MaterialPicker from '../Common/MaterialPicker'
 import type { Material } from '../Common/MaterialPicker'
@@ -54,13 +54,26 @@ const DocumentGenerator = ({ subjectId }: DocumentGeneratorProps) => {
   }
 
   const handleGenerate = async () => {
-    if (selectedIds.length === 0) {
-      message.warning('请至少选择一份资料')
-      return
-    }
     setLoading(true)
     try {
-      const matList = selectedMaterials.map((m) => ({ name: m.name, content: m.content }))
+      // 优先读取 Wiki 内容
+      let matList: { name: string; content: string }[] = []
+      const wikiDir = await window.electron?.wiki.getDir(subjectId)
+      if (wikiDir) {
+        const synthesis = await window.electron?.wiki.getSynthesis(subjectId)
+        if (synthesis) {
+          matList = [{ name: 'Wiki 综合页', content: synthesis }]
+        }
+      }
+
+      // Wiki 不可用时，使用原始资料
+      if (matList.length === 0) {
+        if (selectedIds.length === 0) {
+          message.warning('请至少选择一份资料')
+          return
+        }
+        matList = selectedMaterials.map((m) => ({ name: m.name, content: m.content }))
+      }
 
       const templateInfo = DOC_TEMPLATES.find((t) => t.value === template)
       const fullInstruction = template === 'custom'
@@ -102,6 +115,20 @@ const DocumentGenerator = ({ subjectId }: DocumentGeneratorProps) => {
     }
   }
 
+  const handleSaveToWiki = async () => {
+    if (!docContent) {
+      message.warning('请先生成文档')
+      return
+    }
+    const title = docTitle || '复习文档'
+    const result = await window.electron?.wiki.saveQueryResult(subjectId, title, docContent)
+    if (result?.success) {
+      message.success('已保存到 Wiki 综合页')
+    } else {
+      message.error(result?.error || '保存失败，可能未配置 Wiki 目录')
+    }
+  }
+
   const handleExportMd = async () => {
     if (!docContent) {
       message.warning('请先生成文档')
@@ -124,6 +151,18 @@ const DocumentGenerator = ({ subjectId }: DocumentGeneratorProps) => {
     if (result?.path) {
       message.success(`已保存到: ${result.path}`)
     }
+  }
+
+  const handleExportPdf = async () => {
+    if (!docContent) {
+      message.warning('请先生成文档')
+      return
+    }
+    const defaultName = `${docTitle || '复习文档'}.pdf`
+    const result = await window.electron?.file.exportPdf(docContent, defaultName)
+    if (result?.path) message.success(`已导出 PDF: ${result.path}`)
+    else if (result?.cancelled) message.info('已取消')
+    else if (result?.error) message.error(`导出失败: ${result.error}`)
   }
 
   const handleReviseChat = async () => {
@@ -246,8 +285,11 @@ const DocumentGenerator = ({ subjectId }: DocumentGeneratorProps) => {
                 <Button onClick={handleSaveDocument} size="small">
                   保存到学科
                 </Button>
-                <Button icon={<DownloadOutlined />} onClick={handleExportMd} size="small">
-                  导出 Markdown
+                <Button icon={<SaveOutlined />} onClick={handleSaveToWiki} size="small">
+                  保存到 Wiki
+                </Button>
+                <Button icon={<FilePdfOutlined />} onClick={handleExportPdf} size="small">
+                  导出 PDF
                 </Button>
                 <Button icon={<DownloadOutlined />} onClick={handleExportDocx} size="small">
                   导出 Word

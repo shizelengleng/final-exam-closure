@@ -22,8 +22,8 @@ export function registerDBHandlers() {
     return deleteItem(collection, id)
   })
 
-  ipcMain.handle('db:write', (_event, collection: string, data: unknown[]) => {
-    writeCollection(collection, data)
+  ipcMain.handle('db:write', async (_event, collection: string, data: unknown[]) => {
+    await writeCollection(collection, data)
     return { success: true }
   })
 }

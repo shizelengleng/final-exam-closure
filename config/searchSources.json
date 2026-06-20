@@ -1,12 +1,52 @@
 {
   "sources": [
     {
+      "id": "semantic-scholar",
+      "name": "Semantic Scholar",
+      "type": "academic",
+      "searchUrl": "https://api.semanticscholar.org/graph/v1/paper/search?query=",
+      "enabled": true,
+      "priority": 1
+    },
+    {
+      "id": "arxiv",
+      "name": "arXiv",
+      "type": "academic",
+      "searchUrl": "http://export.arxiv.org/api/query?search_query=all:",
+      "enabled": true,
+      "priority": 2
+    },
+    {
+      "id": "crossref",
+      "name": "CrossRef",
+      "type": "academic",
+      "searchUrl": "https://api.crossref.org/works?query=",
+      "enabled": true,
+      "priority": 3
+    },
+    {
+      "id": "dblp",
+      "name": "DBLP",
+      "type": "academic",
+      "searchUrl": "https://dblp.org/search/publ/api?q=",
+      "enabled": true,
+      "priority": 4
+    },
+    {
+      "id": "openalex",
+      "name": "OpenAlex",
+      "type": "academic",
+      "searchUrl": "https://api.openalex.org/works?search=",
+      "enabled": true,
+      "priority": 5
+    },
+    {
       "id": "baidu-wenku",
       "name": "百度文库",
       "type": "courseware",
       "searchUrl": "https://wenku.baidu.com/search?word=",
       "enabled": true,
-      "priority": 1
+      "priority": 6
     },
     {
       "id": "zhihu",
@@ -14,7 +54,7 @@
       "type": "qa",
       "searchUrl": "https://www.zhihu.com/search?type=content&q=",
       "enabled": true,
-      "priority": 2
+      "priority": 7
     },
     {
       "id": "bilibili",
@@ -22,7 +62,7 @@
       "type": "video",
       "searchUrl": "https://search.bilibili.com/all?keyword=",
       "enabled": true,
-      "priority": 3
+      "priority": 8
     },
     {
       "id": "baidu-xueshu",
@@ -30,7 +70,7 @@
       "type": "academic",
       "searchUrl": "https://xueshu.baidu.com/s?wd=",
       "enabled": true,
-      "priority": 4
+      "priority": 9
     },
     {
       "id": "doc88",
@@ -38,7 +78,7 @@
       "type": "courseware",
       "searchUrl": "https://www.doc88.com/search?key=",
       "enabled": true,
-      "priority": 5
+      "priority": 10
     },
     {
       "id": "douding",
@@ -46,15 +86,15 @@
       "type": "courseware",
       "searchUrl": "https://www.docin.com/search.do?searchcat=2&searchType_banner=p&nkey=",
       "enabled": true,
-      "priority": 6
+      "priority": 11
     },
     {
       "id": "mooc",
       "name": "慕课网",
       "type": "video",
-      "searchUrl": "https://www.imooc.com/search?c=php&k=",
+      "searchUrl": "https://www.imooc.com/search?k=",
       "enabled": true,
-      "priority": 7
+      "priority": 12
     },
     {
       "id": "z-library",
@@ -62,7 +102,7 @@
       "type": "ebook",
       "searchUrl": "https://zh.z-lib.fm/s/",
       "enabled": true,
-      "priority": 8
+      "priority": 13
     },
     {
       "id": "sci-hub",
@@ -70,7 +110,7 @@
       "type": "academic",
       "searchUrl": "https://sci-hub.st/",
       "enabled": true,
-      "priority": 9
+      "priority": 14
     },
     {
       "id": "xmsoushu",
@@ -78,15 +118,7 @@
       "type": "ebook",
       "searchUrl": "https://xmsoushu.com/search?key=",
       "enabled": true,
-      "priority": 10
-    },
-    {
-      "id": "arxiv",
-      "name": "arXiv",
-      "type": "academic",
-      "searchUrl": "https://arxiv.org/search/?query=",
-      "enabled": true,
-      "priority": 11
+      "priority": 15
     },
     {
       "id": "pansou",
@@ -94,7 +126,7 @@
       "type": "ebook",
       "searchUrl": "https://www.pansou.com/?wd=",
       "enabled": true,
-      "priority": 12
+      "priority": 16
     },
     {
       "id": "qiaomi",
@@ -102,7 +134,7 @@
       "type": "pan-search",
       "searchUrl": "https://www.qiaomi.cn/search?wd=",
       "enabled": true,
-      "priority": 13
+      "priority": 17
     },
     {
       "id": "xuetutu",
@@ -110,7 +142,7 @@
       "type": "courseware",
       "searchUrl": "https://www.bzfxw.com/search?word=",
       "enabled": true,
-      "priority": 14
+      "priority": 18
     },
     {
       "id": "chaoxing",
@@ -118,7 +150,7 @@
       "type": "ebook",
       "searchUrl": "https://book.chaoxing.com/search?searchType=1&searchWord=",
       "enabled": true,
-      "priority": 15
+      "priority": 19
     },
     {
       "id": "nicefread",
@@ -126,7 +158,7 @@
       "type": "ebook",
       "searchUrl": "https://www.nicefread.cn/search?keyword=",
       "enabled": true,
-      "priority": 16
+      "priority": 20
     },
     {
       "id": "qiushu",
@@ -134,7 +166,7 @@
       "type": "ebook",
       "searchUrl": "https://www.qianshuwang.com/search?keyword=",
       "enabled": true,
-      "priority": 17
+      "priority": 21
     },
     {
       "id": "github",
@@ -142,7 +174,7 @@
       "type": "code",
       "searchUrl": "https://github.com/search?q=",
       "enabled": true,
-      "priority": 18
+      "priority": 22
     },
     {
       "id": "csdn",
@@ -150,7 +182,39 @@
       "type": "tech",
       "searchUrl": "https://so.csdn.net/so/search?q=",
       "enabled": true,
-      "priority": 19
+      "priority": 23
+    },
+    {
+      "id": "anysearch",
+      "name": "AnySearch",
+      "type": "tech",
+      "searchUrl": "",
+      "enabled": true,
+      "priority": 0
+    },
+    {
+      "id": "anysearch-academic",
+      "name": "AnySearch 学术",
+      "type": "academic",
+      "searchUrl": "",
+      "enabled": true,
+      "priority": 0
+    },
+    {
+      "id": "anysearch-code",
+      "name": "AnySearch 代码",
+      "type": "code",
+      "searchUrl": "",
+      "enabled": true,
+      "priority": 0
+    },
+    {
+      "id": "anysearch-education",
+      "name": "AnySearch 教育",
+      "type": "academic",
+      "searchUrl": "",
+      "enabled": true,
+      "priority": 0
     }
   ]
 }

@@ -19,8 +19,8 @@ interface AIConfigRecord {
 
 let currentConfig: AIConfig = { provider: 'deepseek', apiKey: '', baseUrl: '' }
 
-function loadConfig() {
-  const records = readCollection<AIConfigRecord>('config')
+async function loadConfig() {
+  const records = await readCollection<AIConfigRecord>('config')
   const saved = records.find((r) => r.id === 'aiConfig')
   if (saved) {
     currentConfig = {
@@ -31,20 +31,20 @@ function loadConfig() {
   }
 }
 
-function saveConfig() {
-  const records = readCollection<AIConfigRecord>('config')
+async function saveConfig() {
+  const records = await readCollection<AIConfigRecord>('config')
   const idx = records.findIndex((r) => r.id === 'aiConfig')
   const entry: AIConfigRecord = { id: 'aiConfig', ...currentConfig }
   if (idx >= 0) {
     records[idx] = entry
-    writeCollection('config', records)
+    await writeCollection('config', records)
   } else {
-    appendItem('config', entry)
+    await appendItem('config', entry)
   }
 }
 
-export function registerAIHandlers() {
-  loadConfig()
+export async function registerAIHandlers() {
+  await loadConfig()
 
   ipcMain.handle('ai:setConfig', (_event, config: { provider: string; apiKey: string; baseUrl?: string }) => {
     currentConfig = {
@@ -84,9 +84,9 @@ export function registerAIHandlers() {
     return generateGraphFromContent(currentConfig, content)
   })
 
-  ipcMain.handle('ai:categorizeMaterial', async (_event, name: string, content: string, categories: string[]) => {
+  ipcMain.handle('ai:categorizeMaterial', async (_event, name: string, content: string, categories: string[], imageBase64?: string) => {
     if (currentConfig.provider !== 'claude-code' && !currentConfig.apiKey) throw new Error('请先在设置中配置 API Key')
-    return categorizeMaterial(currentConfig, name, content, categories)
+    return categorizeMaterial(currentConfig, name, content, categories, imageBase64)
   })
 
   ipcMain.handle('ai:selectMaterialsForGraph', async (_event, message: string, materials: { id: string; name: string; content: string }[]) => {
@@ -97,7 +97,7 @@ export function registerAIHandlers() {
   ipcMain.handle('ai:manageSources', async (_event, message: string) => {
     if (currentConfig.provider !== 'claude-code' && !currentConfig.apiKey) throw new Error('请先在设置中配置 API Key')
 
-    const currentSources = readCollection<SearchSource>('searchSources')
+    const currentSources = await readCollection<SearchSource>('searchSources')
     const result = await manageSources(currentConfig, message, currentSources)
 
     if (result.action === 'add' && result.source) {
@@ -107,20 +107,20 @@ export function registerAIHandlers() {
         id: `src_${Date.now()}`,
         priority: result.source.priority || maxPriority + 1,
       }
-      appendItem('searchSources', newSource)
-      reloadSearchEngine()
+      await appendItem('searchSources', newSource)
+      await reloadSearchEngine()
     } else if (result.action === 'update' && result.sourceId && result.source) {
-      updateItem<SearchSource>('searchSources', result.sourceId, result.source)
-      reloadSearchEngine()
+      await updateItem<SearchSource>('searchSources', result.sourceId, result.source)
+      await reloadSearchEngine()
     } else if (result.action === 'delete' && result.sourceId) {
-      deleteItem('searchSources', result.sourceId)
-      reloadSearchEngine()
+      await deleteItem('searchSources', result.sourceId)
+      await reloadSearchEngine()
     } else if (result.action === 'toggle' && result.sourceId) {
-      const sources = readCollection<SearchSource>('searchSources')
+      const sources = await readCollection<SearchSource>('searchSources')
       const source = sources.find((s) => s.id === result.sourceId)
       if (source) {
-        updateItem<SearchSource>('searchSources', result.sourceId, { enabled: !source.enabled } as Partial<SearchSource>)
-        reloadSearchEngine()
+        await updateItem<SearchSource>('searchSources', result.sourceId, { enabled: !source.enabled } as Partial<SearchSource>)
+        await reloadSearchEngine()
       }
     }
 
@@ -132,8 +132,8 @@ export function registerAIHandlers() {
     return generateDocument(currentConfig, materials, instruction, template)
   })
 
-  ipcMain.handle('ai:reviseDocument', async (_event, originalContent: string, userMessage: string) => {
+  ipcMain.handle('ai:reviseDocument', async (_event, originalContent: string, userMessage: string, materials?: { name: string; content: string }[]) => {
     if (currentConfig.provider !== 'claude-code' && !currentConfig.apiKey) throw new Error('请先在设置中配置 API Key')
-    return reviseDocument(currentConfig, originalContent, userMessage)
+    return reviseDocument(currentConfig, originalContent, userMessage, materials)
   })
 }

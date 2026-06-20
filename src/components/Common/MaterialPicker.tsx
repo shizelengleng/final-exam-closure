@@ -11,7 +11,7 @@ interface Material {
   type: string
   size: string
   content: string
-  category: string
+  tag?: string
   addedAt: string
 }
 
@@ -25,7 +25,6 @@ interface MaterialPickerProps {
   value?: string[]
   onChange?: (selectedIds: string[], selectedMaterials: Material[]) => void
   materials?: Material[]
-  categories?: Category[]
 }
 
 const getTypeIcon = (type: string) => {
@@ -38,51 +37,51 @@ const getTypeIcon = (type: string) => {
   }
 }
 
-const DEFAULT_CATEGORIES: Category[] = [
-  { id: 'default', name: '未分类', color: '#8c8c8c' },
-]
-
-const MaterialPicker = ({ value = [], onChange, materials: propMaterials, categories: propCategories }: MaterialPickerProps) => {
+const MaterialPicker = ({ value = [], onChange, materials: propMaterials }: MaterialPickerProps) => {
   const [internalMaterials, setInternalMaterials] = useState<Material[]>([])
-  const [internalCategories, setInternalCategories] = useState<Category[]>([])
   const [search, setSearch] = useState('')
   const [expandedKeys, setExpandedKeys] = useState<string[]>([])
 
   // 如果父组件传了数据就用父组件的，否则自己加载
   const materials = propMaterials ?? internalMaterials
-  const categories = propCategories ?? internalCategories
 
   const loadData = async () => {
     if (propMaterials !== undefined) return // 由父组件管理数据
-    const [matData, catData] = await Promise.all([
-      window.electron?.db.list('materials'),
-      window.electron?.db.list('categories'),
-    ])
+    const matData = await window.electron?.db.list('materials')
     const mats = (matData as Material[]) || []
-    const cats = (catData as Category[]) || []
     setInternalMaterials(mats)
-    const finalCats = cats.length > 0 ? cats : DEFAULT_CATEGORIES
-    setInternalCategories(finalCats)
-    setExpandedKeys(finalCats.map((c) => c.id))
   }
 
   useEffect(() => {
     loadData()
   }, [])
 
-  // 当父组件的 materials 变化时，自动展开有内容的分类
+  // 按 tag 分组资料
+  const tagGroups = new Map<string, Material[]>()
+  for (const mat of materials) {
+    const tag = mat.tag || 'default'
+    if (!tagGroups.has(tag)) tagGroups.set(tag, [])
+    tagGroups.get(tag)!.push(mat)
+  }
+
+  // 构建 categories 列表
+  const categories: Category[] = Array.from(tagGroups.entries()).map(([tagId, mats]) => ({
+    id: tagId,
+    name: tagId === 'default' ? '未分类' : tagId,
+    color: '#8c8c8c',
+  }))
+
+  // 当 materials 变化时，自动展开
   useEffect(() => {
-    if (propMaterials !== undefined && propCategories !== undefined) {
-      setExpandedKeys(propCategories.map((c) => c.id))
-    }
-  }, [propMaterials, propCategories])
+    setExpandedKeys(categories.map((c) => c.id))
+  }, [materials])
 
   const keyword = search.trim().toLowerCase()
 
-  // 按分类分组资料
+  // 按 tag 分组资料
   const grouped = categories.map((cat) => {
     const catMaterials = materials.filter(
-      (m) => m.category === cat.id && (!keyword || m.name.toLowerCase().includes(keyword))
+      (m) => (m.tag || 'default') === cat.id && (!keyword || m.name.toLowerCase().includes(keyword))
     )
     return { ...cat, materials: catMaterials }
   }).filter((g) => g.materials.length > 0 || !keyword)
@@ -91,7 +90,7 @@ const MaterialPicker = ({ value = [], onChange, materials: propMaterials, catego
   const categorizedGroups = grouped.filter((g) => g.id !== 'default')
 
   const handleToggleCategory = (catId: string, checked: boolean) => {
-    const catMaterials = materials.filter((m) => m.category === catId)
+    const catMaterials = materials.filter((m) => (m.tag || 'default') === catId)
     const catIds = catMaterials.map((m) => m.id)
     let newSelected: string[]
     if (checked) {
@@ -112,12 +111,12 @@ const MaterialPicker = ({ value = [], onChange, materials: propMaterials, catego
   }
 
   const isCategoryChecked = (catId: string) => {
-    const catIds = materials.filter((m) => m.category === catId).map((m) => m.id)
+    const catIds = materials.filter((m) => (m.tag || 'default') === catId).map((m) => m.id)
     return catIds.length > 0 && catIds.every((id) => value.includes(id))
   }
 
   const isCategoryIndeterminate = (catId: string) => {
-    const catIds = materials.filter((m) => m.category === catId).map((m) => m.id)
+    const catIds = materials.filter((m) => (m.tag || 'default') === catId).map((m) => m.id)
     const selected = catIds.filter((id) => value.includes(id))
     return selected.length > 0 && selected.length < catIds.length
   }
@@ -224,4 +223,4 @@ const MaterialPicker = ({ value = [], onChange, materials: propMaterials, catego
 }
 
 export default MaterialPicker
-export type { Material, Category }
+export type { Material }

@@ -5,17 +5,17 @@ import sourcesConfig from '../../config/searchSources.json'
 
 let engine: SearchEngine | null = null
 
-function initSearchEngine() {
-  let sources = readCollection<SearchSource>('searchSources')
+async function initSearchEngine() {
+  let sources = await readCollection<SearchSource>('searchSources')
   if (sources.length === 0) {
     sources = sourcesConfig.sources as SearchSource[]
-    writeCollection('searchSources', sources)
+    await writeCollection('searchSources', sources)
   }
   engine = new SearchEngine(sources)
 }
 
-export function reloadSearchEngine() {
-  const sources = readCollection<SearchSource>('searchSources')
+export async function reloadSearchEngine() {
+  const sources = await readCollection<SearchSource>('searchSources')
   if (engine) {
     engine.reload(sources)
   } else {
@@ -24,12 +24,12 @@ export function reloadSearchEngine() {
 }
 
 function getEngine(): SearchEngine {
-  if (!engine) initSearchEngine()
-  return engine!
+  if (!engine) throw new Error('搜索引擎未初始化')
+  return engine
 }
 
-export function registerSearchHandlers() {
-  initSearchEngine()
+export async function registerSearchHandlers() {
+  await initSearchEngine()
 
   ipcMain.handle('search:query', async (_event, keyword: string, sourceIds?: string[]) => {
     return getEngine().search(keyword, sourceIds)
@@ -39,40 +39,44 @@ export function registerSearchHandlers() {
     return getEngine().getSources()
   })
 
-  ipcMain.handle('search:getAllSources', () => {
+  ipcMain.handle('search:getAllSources', async () => {
     return readCollection<SearchSource>('searchSources')
   })
 
-  ipcMain.handle('search:addSource', (_event, source: Omit<SearchSource, 'id'>) => {
+  ipcMain.handle('search:addSource', async (_event, source: Omit<SearchSource, 'id'>) => {
     const newSource: SearchSource = {
       ...source,
       id: `src_${Date.now()}`,
     }
-    appendItem('searchSources', newSource)
-    reloadSearchEngine()
+    await appendItem('searchSources', newSource)
+    await reloadSearchEngine()
     return newSource
   })
 
-  ipcMain.handle('search:updateSource', (_event, id: string, updates: Partial<SearchSource>) => {
-    const updated = updateItem<SearchSource>('searchSources', id, updates)
-    reloadSearchEngine()
+  ipcMain.handle('search:updateSource', async (_event, id: string, updates: Partial<SearchSource>) => {
+    const updated = await updateItem<SearchSource>('searchSources', id, updates)
+    await reloadSearchEngine()
     return updated
   })
 
-  ipcMain.handle('search:deleteSource', (_event, id: string) => {
-    deleteItem('searchSources', id)
-    reloadSearchEngine()
+  ipcMain.handle('search:deleteSource', async (_event, id: string) => {
+    await deleteItem('searchSources', id)
+    await reloadSearchEngine()
     return { success: true }
   })
 
-  ipcMain.handle('search:toggleSource', (_event, id: string) => {
-    const sources = readCollection<SearchSource>('searchSources')
+  ipcMain.handle('search:toggleSource', async (_event, id: string) => {
+    const sources = await readCollection<SearchSource>('searchSources')
     const source = sources.find((s) => s.id === id)
     if (source) {
-      updateItem<SearchSource>('searchSources', id, { enabled: !source.enabled } as Partial<SearchSource>)
-      reloadSearchEngine()
+      await updateItem<SearchSource>('searchSources', id, { enabled: !source.enabled } as Partial<SearchSource>)
+      await reloadSearchEngine()
       return { ...source, enabled: !source.enabled }
     }
     return null
+  })
+
+  ipcMain.handle('search:fetchAsMarkdown', async (_event, url: string) => {
+    return getEngine().fetchPageAsMarkdown(url)
   })
 }

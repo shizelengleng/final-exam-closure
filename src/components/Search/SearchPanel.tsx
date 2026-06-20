@@ -1,17 +1,76 @@
 import { useState, useEffect } from 'react'
-import { Input, Button, Card, Tag, Empty, Checkbox, message } from 'antd'
-import { SearchOutlined, DownloadOutlined, StarOutlined, LinkOutlined } from '@ant-design/icons'
+import { Input, Button, Card, Tag, Empty, Checkbox, Spin, message, Collapse } from 'antd'
+import { SearchOutlined, DownloadOutlined, StarOutlined, LinkOutlined, FileTextOutlined, UpOutlined, DownOutlined } from '@ant-design/icons'
+import { marked } from 'marked'
 
 interface SearchPanelProps {
   subjectId: string
 }
 
+interface ResultGroup {
+  sourceId: string
+  sourceName: string
+  type: string
+  results: SearchResult[]
+}
+
+const SOURCE_COLORS: Record<string, string> = {
+  'semantic-scholar': 'green',
+  'arxiv': 'blue',
+  'crossref': 'orange',
+  'dblp': 'purple',
+  'openalex': 'cyan',
+  'bing': 'geekblue',
+  'baidu': 'blue',
+  'ddg': 'red',
+  'baidu-wenku': 'blue',
+  'zhihu': 'blue',
+  'bilibili': 'pink',
+  'baidu-xueshu': 'green',
+  'csdn': 'red',
+  'github': 'default',
+}
+
+const TYPE_LABELS: Record<string, { color: string; text: string }> = {
+  courseware: { color: 'blue', text: '课件' },
+  qa: { color: 'orange', text: '问答' },
+  video: { color: 'red', text: '视频' },
+  academic: { color: 'green', text: '学术' },
+  ebook: { color: 'purple', text: '电子书' },
+  'pan-search': { color: 'cyan', text: '网盘' },
+  code: { color: 'geekblue', text: '代码' },
+  tech: { color: 'volcano', text: '技术' },
+  web: { color: 'default', text: '网页' },
+}
+
+function groupBySource(results: SearchResult[]): ResultGroup[] {
+  const map = new Map<string, ResultGroup>()
+  for (const r of results) {
+    const key = r.sourceId
+    if (!map.has(key)) {
+      map.set(key, {
+        sourceId: key,
+        sourceName: r.source,
+        type: r.type,
+        results: [],
+      })
+    }
+    map.get(key)!.results.push(r)
+  }
+  return Array.from(map.values()).sort((a, b) => b.results.length - a.results.length)
+}
+
 const SearchPanel = ({ subjectId }: SearchPanelProps) => {
   const [keyword, setKeyword] = useState('')
   const [results, setResults] = useState<SearchResult[]>([])
+  const [groups, setGroups] = useState<ResultGroup[]>([])
   const [loading, setLoading] = useState(false)
   const [sources, setSources] = useState<SearchSource[]>([])
   const [selectedSources, setSelectedSources] = useState<string[]>([])
+  const [expandedId, setExpandedId] = useState<string | null>(null)
+  const [expandedContent, setExpandedContent] = useState('')
+  const [expandedLoading, setExpandedLoading] = useState(false)
+  const [activeGroups, setActiveGroups] = useState<string[]>([])
 
   useEffect(() => {
     window.electron?.search.getSources().then((s) => {
@@ -19,6 +78,12 @@ const SearchPanel = ({ subjectId }: SearchPanelProps) => {
       setSelectedSources(s.map((src) => src.id))
     })
   }, [])
+
+  useEffect(() => {
+    const g = groupBySource(results)
+    setGroups(g)
+    setActiveGroups(g.map(grp => grp.sourceId))
+  }, [results])
 
   const handleSearch = async () => {
     if (!keyword.trim()) {
@@ -51,16 +116,133 @@ const SearchPanel = ({ subjectId }: SearchPanelProps) => {
     message.success(`已导入: ${item.title}`)
   }
 
-  const typeLabel: Record<string, { color: string; text: string }> = {
-    courseware: { color: 'blue', text: '课件' },
-    qa: { color: 'orange', text: '问答' },
-    video: { color: 'red', text: '视频' },
-    academic: { color: 'green', text: '学术' },
-    ebook: { color: 'purple', text: '电子书' },
-    'pan-search': { color: 'cyan', text: '网盘' },
-    code: { color: 'geekblue', text: '代码' },
-    tech: { color: 'volcano', text: '技术' },
+  const handleSaveMarkdown = async (item: SearchResult) => {
+    try {
+      const markdown = await window.electron?.search.fetchAsMarkdown(item.url)
+      if (!markdown) {
+        message.error('获取页面内容失败')
+        return
+      }
+      const material = {
+        id: `mat_${Date.now()}`,
+        name: `${item.title} (MD)`,
+        type: 'search',
+        size: '-',
+        content: markdown,
+        subjectId,
+        addedAt: new Date().toLocaleString('zh-CN'),
+      }
+      await window.electron?.db.add('materials', material)
+      message.success(`已保存为 Markdown: ${item.title}`)
+    } catch {
+      message.error('保存 Markdown 失败')
+    }
   }
+
+  const handleToggleExpand = async (item: SearchResult) => {
+    if (expandedId === item.id) {
+      setExpandedId(null)
+      return
+    }
+    setExpandedId(item.id)
+    setExpandedContent('')
+    setExpandedLoading(true)
+    try {
+      const markdown = await window.electron?.search.fetchAsMarkdown(item.url)
+      setExpandedContent(markdown || '无法获取页面内容')
+    } catch {
+      setExpandedContent('获取页面内容失败')
+    } finally {
+      setExpandedLoading(false)
+    }
+  }
+
+  const renderResultCard = (item: SearchResult) => (
+    <div key={item.id}>
+      <Card hoverable className="shadow-sm">
+        <div className="flex justify-between items-start">
+          <div className="flex-1">
+            <div className="flex items-center gap-2">
+              <h3
+                className="font-medium text-gray-800 cursor-pointer hover:text-blue-500"
+                onClick={() => window.electron?.shell.openExternal(item.url)}
+              >
+                {item.title}
+              </h3>
+              <LinkOutlined
+                className="text-gray-300 cursor-pointer hover:text-blue-500"
+                onClick={() => window.electron?.shell.openExternal(item.url)}
+              />
+            </div>
+            <p className="text-sm text-gray-500 mt-1">{item.summary}</p>
+            <div className="flex gap-2 mt-2 flex-wrap items-center">
+              <Tag color={TYPE_LABELS[item.type]?.color || 'default'}>
+                {TYPE_LABELS[item.type]?.text || item.type}
+              </Tag>
+              {(item as any).year && (
+                <Tag className="!text-xs">{(item as any).year}年</Tag>
+              )}
+              {(item as any).citationCount != null && (item as any).citationCount > 0 && (
+                <Tag className="!text-xs">引用 {(item as any).citationCount}</Tag>
+              )}
+              {(item as any).authors && (
+                <span className="text-xs text-gray-400 truncate max-w-[200px]">{(item as any).authors}</span>
+              )}
+              <span className="text-xs text-gray-400">
+                相关度: {Math.round(item.score * 100)}%
+              </span>
+            </div>
+          </div>
+          <div className="flex gap-2 ml-4 flex-shrink-0">
+            <Button
+              icon={expandedId === item.id ? <UpOutlined /> : <DownOutlined />}
+              size="small"
+              onClick={(e) => { e.stopPropagation(); handleToggleExpand(item) }}
+            >
+              {expandedId === item.id ? '收起' : '预览'}
+            </Button>
+            <Button
+              icon={<DownloadOutlined />}
+              size="small"
+              onClick={(e) => { e.stopPropagation(); handleImport(item) }}
+            >
+              导入
+            </Button>
+            <Button
+              icon={<FileTextOutlined />}
+              size="small"
+              onClick={(e) => { e.stopPropagation(); handleSaveMarkdown(item) }}
+            >
+              保存 MD
+            </Button>
+            <Button
+              icon={<StarOutlined />}
+              size="small"
+              type="text"
+              onClick={(e) => e.stopPropagation()}
+            >
+              收藏
+            </Button>
+          </div>
+        </div>
+      </Card>
+      {expandedId === item.id && (
+        <div className="border border-t-0 border-gray-200 rounded-b-lg bg-gray-50 p-4 -mt-3">
+          {expandedLoading ? (
+            <div className="flex items-center justify-center py-4">
+              <Spin size="small" />
+              <span className="text-sm text-gray-500 ml-2">正在获取页面内容...</span>
+            </div>
+          ) : (
+            <div
+              className="prose prose-sm max-w-none text-sm text-gray-700 leading-relaxed max-h-96 overflow-auto"
+              dangerouslySetInnerHTML={{ __html: marked.parse(expandedContent) as string }}
+            />
+          )}
+        </div>
+      )}
+    </div>
+  )
 
   return (
     <div className="space-y-6 p-6">
@@ -98,7 +280,7 @@ const SearchPanel = ({ subjectId }: SearchPanelProps) => {
               }}
               className="!text-xs"
             >
-              <Tag color={typeLabel[source.type]?.color || 'default'} className="!text-xs !m-0">
+              <Tag color={SOURCE_COLORS[source.id] || TYPE_LABELS[source.type]?.color || 'default'} className="!text-xs !m-0">
                 {source.name}
               </Tag>
             </Checkbox>
@@ -107,38 +289,31 @@ const SearchPanel = ({ subjectId }: SearchPanelProps) => {
       </div>
 
       {results.length > 0 ? (
-        <div className="space-y-3">
-          <p className="text-sm text-gray-500">找到 {results.length} 个结果</p>
-          {results.map((item) => (
-            <Card key={item.id} hoverable className="shadow-sm">
-              <div className="flex justify-between items-start">
-                <div className="flex-1">
-                  <div className="flex items-center gap-2">
-                    <h3 className="font-medium text-gray-800">{item.title}</h3>
-                    <LinkOutlined className="text-gray-300" />
-                  </div>
-                  <p className="text-sm text-gray-500 mt-1">{item.summary}</p>
-                  <div className="flex gap-2 mt-2">
-                    <Tag>{item.source}</Tag>
-                    <Tag color={typeLabel[item.type]?.color || 'default'}>
-                      {typeLabel[item.type]?.text || item.type}
-                    </Tag>
-                    <span className="text-xs text-gray-400">
-                      相关度: {Math.round(item.score * 100)}%
-                    </span>
-                  </div>
+        <div>
+          <p className="text-sm text-gray-500 mb-3">找到 {results.length} 个结果，来自 {groups.length} 个来源</p>
+          <Collapse
+            activeKey={activeGroups}
+            onChange={(keys) => setActiveGroups(keys as string[])}
+            items={groups.map((group) => ({
+              key: group.sourceId,
+              label: (
+                <div className="flex items-center gap-2">
+                  <Tag color={SOURCE_COLORS[group.sourceId] || 'default'} className="!m-0">
+                    {group.sourceName}
+                  </Tag>
+                  <span className="text-xs text-gray-500">{group.results.length} 个结果</span>
+                  <Tag color={TYPE_LABELS[group.type]?.color || 'default'} className="!text-xs !m-0">
+                    {TYPE_LABELS[group.type]?.text || group.type}
+                  </Tag>
                 </div>
-                <div className="flex gap-2 ml-4">
-                  <Button icon={<DownloadOutlined />} size="small" onClick={() => handleImport(item)}>
-                    导入
-                  </Button>
-                  <Button icon={<StarOutlined />} size="small" type="text">
-                    收藏
-                  </Button>
+              ),
+              children: (
+                <div className="space-y-3">
+                  {group.results.map(renderResultCard)}
                 </div>
-              </div>
-            </Card>
-          ))}
+              ),
+            }))}
+          />
         </div>
       ) : (
         !loading && <Empty description="输入关键词开始搜索" className="mt-12" />
