@@ -231,15 +231,15 @@ const QuizSession = ({ subjectId }: QuizSessionProps) => {
             </div>
           </div>
 
-          <div className="p-4 border-b border-gray-200">
-            <div className="flex items-center gap-2 mb-2">
+          <div className="p-4 border-b border-gray-200 flex flex-col flex-1 min-h-0">
+            <div className="flex items-center gap-2 mb-2 flex-shrink-0">
               <BookOutlined className="text-blue-500" />
               <span className="text-xs font-semibold text-gray-700">参考资料</span>
               {selectedMaterialIds.length > 0 && (
                 <Tag color="blue" className="!text-xs !ml-auto">{selectedMaterialIds.length} 份</Tag>
               )}
             </div>
-            <div className="h-40 overflow-auto">
+            <div className="flex-1 min-h-0 overflow-auto">
               <MaterialPicker
                 value={selectedMaterialIds}
                 onChange={setSelectedMaterialIds}

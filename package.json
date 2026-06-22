@@ -1,6 +1,6 @@
 {
-  "name": "final-exam-completer",
-  "version": "0.1.0",
+  "name": "final-exam-closure",
+  "version": "0.2.5",
   "description": "期末补完计划 - AI驱动的期末复习助手",
   "main": "dist-electron/main.js",
   "scripts": {
@@ -56,7 +56,7 @@
     "vite-plugin-electron-renderer": "^0.14.0"
   },
   "build": {
-    "appId": "com.finalexam.completer",
+    "appId": "com.finalexam.closure",
     "productName": "期末补完计划",
     "npmRebuild": false,
     "directories": {

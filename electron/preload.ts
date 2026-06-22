@@ -27,10 +27,24 @@ contextBridge.exposeInMainWorld('electron', {
     selectMaterialsForGraph: (message: string, materials: { id: string; name: string; content: string }[]) =>
       ipcRenderer.invoke('ai:selectMaterialsForGraph', message, materials),
     manageSources: (message: string) => ipcRenderer.invoke('ai:manageSources', message),
-    generateDocument: (materials: { name: string; content: string }[], instruction: string, template: string) =>
-      ipcRenderer.invoke('ai:generateDocument', materials, instruction, template),
+    generateDocument: (materials: { name: string; content: string }[], instruction: string, template: string, subjectName?: string) =>
+      ipcRenderer.invoke('ai:generateDocument', materials, instruction, template, subjectName),
     reviseDocument: (originalContent: string, userMessage: string, materials?: { name: string; content: string }[]) =>
       ipcRenderer.invoke('ai:reviseDocument', originalContent, userMessage, materials),
+    orchestrateDocument: (materials: { name: string; content: string }[], instruction: string, template: string, subjectName?: string) =>
+      ipcRenderer.invoke('ai:orchestrateDocument', { materials, instruction, template, subjectName }),
+  },
+  orchestrator: {
+    resume: (params: { orchestrationId: string; checkpoint: number; approved: boolean; userNotes?: string }) =>
+      ipcRenderer.invoke('orchestrator:resume', params),
+    cancel: (params: { orchestrationId: string }) =>
+      ipcRenderer.invoke('orchestrator:cancel', params),
+    onProgress: (callback: (snapshot: unknown) => void) => {
+      ipcRenderer.on('orchestrator:progress', (_event, snapshot) => callback(snapshot))
+    },
+    removeProgressListener: () => {
+      ipcRenderer.removeAllListeners('orchestrator:progress')
+    },
   },
   search: {
     query: (keyword: string, sourceIds?: string[]) =>

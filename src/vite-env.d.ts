@@ -74,6 +74,42 @@ interface WikiAPI {
   deletePage: (subjectId: string, pageName: string, pageType: string) => Promise<{ success: boolean; error?: string }>
 }
 
+// === Orchestration types ===
+interface OrchestrationSnapshot {
+  id: string
+  status: 'running' | 'paused_checkpoint' | 'completed' | 'failed'
+  currentPhase: number
+  currentPhaseName: string
+  phaseProgress: { current: number; total: number; label: string } | null
+  qualityCheckResult: { passed: boolean; issues: string[] } | null
+  checkpointData: { checkpoint: number; [key: string]: unknown } | null
+  elapsedMs: number
+  error: string | null
+  failedPhase: number | null
+  intermediateResults: {
+    knowledgePoints: unknown[] | null
+    documentPlan: { title: string; overview: string; topics: { id: string; title: string; subtopics: string[]; exerciseStrategy: string; depthNotes: string }[]; formatPlan: string } | null
+    styleAnchor: { topicId: string; content: string; structuralElements: string[]; wordCount: number } | null
+    topicContents: { topicId: string; topicTitle: string; content: string; qualityPassed: boolean; qualityIssues: string[] }[]
+    reviewIssues: { id: string; severity: string; topicId: string | null; description: string; suggestedFix: string }[]
+  }
+}
+
+interface OrchestrationResult {
+  title: string
+  content: string
+  orchestrationId: string
+  phasesCompleted: number[]
+  totalElapsedMs: number
+}
+
+interface OrchestratorAPI {
+  resume: (params: { orchestrationId: string; checkpoint: number; approved: boolean; userNotes?: string }) => Promise<void>
+  cancel: (params: { orchestrationId: string }) => Promise<void>
+  onProgress: (callback: (snapshot: OrchestrationSnapshot) => void) => void
+  removeProgressListener: () => void
+}
+
 interface ElectronAPI {
   ipcRenderer: {
     send: (channel: string, ...args: unknown[]) => void
@@ -116,8 +152,9 @@ interface ElectronAPI {
       instruction: string
     }>
     manageSources: (message: string) => Promise<{ action: string; source?: SearchSource; sourceId?: string; message: string }>
-    generateDocument: (materials: { name: string; content: string }[], instruction: string, template: string) => Promise<{ title: string; content: string }>
+    generateDocument: (materials: { name: string; content: string }[], instruction: string, template: string, subjectName?: string) => Promise<{ title: string; content: string }>
     reviseDocument: (originalContent: string, userMessage: string, materials?: { name: string; content: string }[]) => Promise<string>
+    orchestrateDocument: (materials: { name: string; content: string }[], instruction: string, template: string, subjectName?: string) => Promise<OrchestrationResult>
   }
   search: {
     query: (keyword: string, sourceIds?: string[]) => Promise<SearchResult[]>
@@ -149,6 +186,7 @@ interface ElectronAPI {
   shell: {
     openExternal: (url: string) => Promise<void>
   }
+  orchestrator: OrchestratorAPI
   wiki: WikiAPI
   terminal: {
     create: (options?: { cli?: string }) => void

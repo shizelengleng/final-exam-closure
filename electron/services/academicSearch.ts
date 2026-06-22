@@ -27,7 +27,7 @@ async function searchSemanticScholar(keyword: string, limit = 10): Promise<Acade
   try {
     const url = `https://api.semanticscholar.org/graph/v1/paper/search?query=${encodeURIComponent(keyword)}&limit=${limit}&fields=title,authors,url,abstract,year,citationCount,externalIds`
     const res = await fetch(url, {
-      headers: { 'User-Agent': 'FinalExamCompleter/1.0' },
+      headers: { 'User-Agent': 'FinalExamClosure/1.0' },
       signal: AbortSignal.timeout(10000),
     } as any)
     if (!res.ok) return []
@@ -97,9 +97,9 @@ async function searchArxiv(keyword: string, limit = 10): Promise<AcademicResult[
 // CrossRef - 期刊元数据，免费无限制
 async function searchCrossRef(keyword: string, limit = 10): Promise<AcademicResult[]> {
   try {
-    const url = `https://api.crossref.org/works?query=${encodeURIComponent(keyword)}&rows=${limit}&sort=relevance&mailto=finalexam@completer.app`
+    const url = `https://api.crossref.org/works?query=${encodeURIComponent(keyword)}&rows=${limit}&sort=relevance&mailto=finalexam@closure.app`
     const res = await fetch(url, {
-      headers: { 'User-Agent': 'FinalExamCompleter/1.0 (mailto:finalexam@completer.app)' },
+      headers: { 'User-Agent': 'FinalExamClosure/1.0 (mailto:finalexam@closure.app)' },
       signal: AbortSignal.timeout(10000),
     } as any)
     if (!res.ok) return []
@@ -177,9 +177,9 @@ async function searchDBLP(keyword: string, limit = 10): Promise<AcademicResult[]
 // OpenAlex - 2.4亿学术作品，免费无限制
 async function searchOpenAlex(keyword: string, limit = 10): Promise<AcademicResult[]> {
   try {
-    const url = `https://api.openalex.org/works?search=${encodeURIComponent(keyword)}&per_page=${limit}&mailto=finalexam@completer.app`
+    const url = `https://api.openalex.org/works?search=${encodeURIComponent(keyword)}&per_page=${limit}&mailto=finalexam@closure.app`
     const res = await fetch(url, {
-      headers: { 'User-Agent': 'FinalExamCompleter/1.0' },
+      headers: { 'User-Agent': 'FinalExamClosure/1.0' },
       signal: AbortSignal.timeout(10000),
     } as any)
     if (!res.ok) return []

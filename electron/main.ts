@@ -116,7 +116,8 @@ ipcMain.handle('file:readDocx', async (_event, buffer: number[]) => {
 ipcMain.handle('file:getAsFile', async (_event, filePath: string) => {
   try {
     await fs.promises.access(filePath)
-    return await fs.promises.readFile(filePath)
+    const buffer = await fs.promises.readFile(filePath)
+    return Array.from(buffer)
   } catch {
     return null
   }

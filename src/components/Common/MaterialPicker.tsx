@@ -162,7 +162,7 @@ const MaterialPicker = ({ value = [], onChange, materials: propMaterials }: Mate
         </div>
       ),
       children: (
-        <div className="space-y-0.5 max-h-48 overflow-auto">
+        <div className="space-y-0.5">
           {catMaterials.map(renderMaterialItem)}
         </div>
       ),

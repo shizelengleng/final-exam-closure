@@ -217,15 +217,15 @@ const KnowledgeGraph = ({ subjectId }: KnowledgeGraphProps) => {
     <div className="flex h-full">
       {/* Left Sidebar: Material Picker + ConversationPanel */}
       <div className="w-80 flex flex-col border-r border-gray-200 bg-gray-50 flex-shrink-0">
-        <div className="p-3 border-b border-gray-200">
-          <div className="flex items-center gap-2 mb-2">
+        <div className="p-3 border-b border-gray-200 flex flex-col flex-1 min-h-0">
+          <div className="flex items-center gap-2 mb-2 flex-shrink-0">
             <BookOutlined className="text-blue-500" />
             <span className="text-xs font-semibold text-gray-700">选择资料</span>
             {selectedMaterialIds.length > 0 && (
               <Tag color="blue" className="!text-xs !ml-auto">{selectedMaterialIds.length} 份</Tag>
             )}
           </div>
-          <div className="h-24 overflow-auto">
+          <div className="flex-1 min-h-0 overflow-auto">
             <MaterialPicker
               value={selectedMaterialIds}
               onChange={(ids) => setSelectedMaterialIds(ids)}
@@ -236,7 +236,7 @@ const KnowledgeGraph = ({ subjectId }: KnowledgeGraphProps) => {
             type="primary"
             size="small"
             block
-            className="mt-2"
+            className="mt-2 flex-shrink-0"
             loading={graphLoading}
             onClick={handleGenerateGraph}
             disabled={selectedMaterialIds.length === 0}

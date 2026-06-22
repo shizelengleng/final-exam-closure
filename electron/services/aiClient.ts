@@ -1,4 +1,13 @@
 import fetch from 'node-fetch'
+import { appendFileSync } from 'fs'
+import { join } from 'path'
+
+const AI_DEBUG_LOG = join(process.env.TEMP || '/tmp', 'orchestrator-debug.log')
+function aiDebugLog(msg: string) {
+  const line = `[${new Date().toLocaleTimeString()}] ${msg}\n`
+  try { appendFileSync(AI_DEBUG_LOG, line) } catch {}
+  console.log(`[AI] ${msg}`)
+}
 
 export type AIProvider = 'deepseek' | 'mimo' | 'claude-code'
 
@@ -19,19 +28,54 @@ const PROVIDER_CONFIG: Record<Exclude<AIProvider, 'claude-code'>, { baseUrl: str
   },
 }
 
-const DEFAULT_CLI_SYSTEM_INSTRUCTION = `【系统指令】你是一个考试出题 AI。你正在通过 API 被调用，不要尝试访问任何文件或目录。
-下面的内容是用户提供的学习资料文本（不是文件路径），请基于这些文本内容完成任务。
-请直接返回 JSON，不要返回其他任何内容，不要尝试读取文件。`
+const JSON_SYSTEM_INSTRUCTION = `你是一个内容处理助手。请基于用户提供的文本完成任务，直接返回 JSON 格式结果。`
 
-async function callClaudeCLI(prompt: string, systemInstruction?: string): Promise<string> {
+const MARKDOWN_SYSTEM_INSTRUCTION = `你是一个学习资料整理助手。请根据用户提供的学习资料，整理成结构清晰、内容详尽的 Markdown 复习文档。文档应当包含完整的知识点讲解、公式推导、例题解析和练习题答案。`
+
+function extractCLIResult(stdout: string, stderr: string): string {
+  const combined = stdout + stderr
+  if (combined.includes('high risk') || combined.includes('rejected')) {
+    throw new Error('__HIGH_RISK__')
+  }
+  if (stdout.length === 0) {
+    throw new Error('Claude CLI 返回为空')
+  }
+  try {
+    const parsed = JSON.parse(stdout.trim())
+    return parsed.result || ''
+  } catch {
+    return stdout.trim()
+  }
+}
+
+function isTruncated(text: string): boolean {
+  if (text.length < 200) return false
+  const last200 = text.slice(-200)
+  if (/```[^`]*$/.test(last200)) return true
+  if (/\[[^\]]*$/.test(last200)) return true
+  if (/\*\*[^*]*$/.test(last200)) return true
+  if (/#{1,3}\s*[^#\n]*$/.test(last200)) return true
+  const sentences = text.split(/[。！？.!?]/).filter(Boolean)
+  if (sentences.length > 3) {
+    const last = sentences[sentences.length - 1]
+    if (last.length < 5) return true
+  }
+  return false
+}
+
+async function callClaudeCLIOnce(prompt: string, systemInstruction?: string): Promise<string> {
   const { spawn } = require('child_process')
-  const instruction = systemInstruction || DEFAULT_CLI_SYSTEM_INSTRUCTION
+
+  const instruction = systemInstruction || MARKDOWN_SYSTEM_INSTRUCTION
   const wrappedPrompt = `${instruction}
 
 【用户请求】
 ${prompt}`
 
-  return new Promise((resolve, reject) => {
+  console.log('[Claude CLI] prompt length:', wrappedPrompt.length)
+  aiDebugLog(`callClaudeCLIOnce: spawning claude, prompt=${wrappedPrompt.length} chars`)
+
+  return new Promise<string>((resolve, reject) => {
     const child = spawn('claude', [
       '-p', '-',
       '--output-format', 'json',
@@ -39,11 +83,23 @@ ${prompt}`
       '--bare',
     ], {
       stdio: ['pipe', 'pipe', 'pipe'],
-      timeout: 180000,
     })
+
+    aiDebugLog('callClaudeCLIOnce: claude process spawned')
 
     let stdout = ''
     let stderr = ''
+    let settled = false
+
+    // Real timeout — spawn's timeout option only works with spawnSync
+    const timer = setTimeout(() => {
+      if (!settled) {
+        settled = true
+        child.kill('SIGTERM')
+        aiDebugLog('callClaudeCLIOnce: TIMEOUT after 300s, killed')
+        reject(new Error('Claude CLI 超时（300秒）'))
+      }
+    }, 300000)
 
     child.stdout.on('data', (data: Buffer) => { stdout += data.toString() })
     child.stderr.on('data', (data: Buffer) => { stderr += data.toString() })
@@ -52,30 +108,26 @@ ${prompt}`
     child.stdin.end()
 
     child.on('close', (code: number | null) => {
-      if (code !== 0 && code !== null) {
-        const msg = stderr || ''
-        if (msg.includes('command not found') || msg.includes('ENOENT')) {
-          reject(new Error('未找到 claude CLI，请先安装 Claude Code: npm install -g @anthropic-ai/claude-code'))
-        } else {
-          reject(new Error(`Claude CLI 调用失败 (exit ${code}): ${msg.substring(0, 300)}`))
-        }
-        return
-      }
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      console.log('[Claude CLI] close, code:', code, 'stdout:', stdout.length, 'stderr:', stderr.length)
+      aiDebugLog(`callClaudeCLIOnce: close, code=${code}, stdout=${stdout.length}, stderr=${stderr.length}`)
       try {
-        const parsed = JSON.parse(stdout.trim())
-        resolve(parsed.result || '')
-      } catch {
-        // 如果不是 JSON，直接返回原始输出（可能是 Markdown）
-        const raw = stdout.trim()
-        if (raw.length > 0) {
-          resolve(raw)
-        } else {
-          reject(new Error(`Claude CLI 返回为空。stderr: ${stderr.substring(0, 200)}`))
-        }
+        const result = extractCLIResult(stdout, stderr)
+        aiDebugLog(`callClaudeCLIOnce: resolved, result=${result.length} chars`)
+        resolve(result)
+      } catch (err) {
+        aiDebugLog(`callClaudeCLIOnce: error extracting result: ${(err as Error).message}`)
+        reject(err)
       }
     })
 
     child.on('error', (err: Error) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      aiDebugLog(`callClaudeCLIOnce: process error: ${err.message}`)
       if (err.message.includes('ENOENT')) {
         reject(new Error('未找到 claude CLI，请先安装 Claude Code: npm install -g @anthropic-ai/claude-code'))
       } else {
@@ -83,6 +135,112 @@ ${prompt}`
       }
     })
   })
+}
+
+async function callClaudeCLIContinue(previousOutput: string, systemInstruction?: string): Promise<string> {
+  const { spawn } = require('child_process')
+  const instruction = systemInstruction || MARKDOWN_SYSTEM_INSTRUCTION
+  // 把之前输出的最后 3000 字作为上下文，让 AI 知道写到哪了
+  const tail = previousOutput.slice(-3000)
+  const continuePrompt = `${instruction}
+
+【用户请求】
+以下是之前已经生成的内容（末尾部分），请从上次中断的地方接着写，不要重复已有内容。
+只输出新增部分的 Markdown，不要包含任何说明文字。
+
+---已生成内容末尾---
+${tail}
+---结束---`
+
+  return new Promise<string>((resolve, reject) => {
+    const child = spawn('claude', [
+      '-p', '-',
+      '--output-format', 'json',
+      '--no-session-persistence',
+      '--bare',
+    ], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
+
+    let stdout = ''
+    let stderr = ''
+    let settled = false
+
+    const timer = setTimeout(() => {
+      if (!settled) {
+        settled = true
+        child.kill('SIGTERM')
+        aiDebugLog('callClaudeCLIContinue: TIMEOUT after 300s')
+        resolve(previousOutput) // return what we have so far
+      }
+    }, 300000)
+
+    child.stdout.on('data', (data: Buffer) => { stdout += data.toString() })
+    child.stderr.on('data', (data: Buffer) => { stderr += data.toString() })
+
+    child.stdin.write(continuePrompt)
+    child.stdin.end()
+
+    child.on('close', (code: number | null) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      aiDebugLog(`callClaudeCLIContinue: close, code=${code}, stdout=${stdout.length}`)
+      try {
+        const result = extractCLIResult(stdout, stderr)
+        resolve(previousOutput + '\n\n' + result)
+      } catch {
+        resolve(previousOutput)
+      }
+    })
+
+    child.on('error', () => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve(previousOutput)
+    })
+  })
+}
+
+async function callClaudeCLI(prompt: string, systemInstruction?: string, noContinue?: boolean): Promise<string> {
+  const maxRetries = 2
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      let output = await callClaudeCLIOnce(prompt, systemInstruction)
+      console.log('[Claude CLI] output length:', output.length)
+      aiDebugLog(`callClaudeCLI: output=${output.length} chars, noContinue=${noContinue}`)
+
+      if (output.length === 0 && attempt < maxRetries) {
+        console.log('[Claude CLI] empty output, retrying...')
+        await new Promise(r => setTimeout(r, 1000))
+        continue
+      }
+
+      if (!noContinue && isTruncated(output)) {
+        console.log('[Claude CLI] truncated, requesting continuation...')
+        aiDebugLog('callClaudeCLI: truncated, calling continue')
+        output = await callClaudeCLIContinue(output, systemInstruction)
+        if (isTruncated(output)) {
+          output = await callClaudeCLIContinue(output, systemInstruction)
+        }
+      }
+
+      return output
+    } catch (err) {
+      const msg = (err as Error).message
+      console.log('[Claude CLI] attempt', attempt, 'error:', msg)
+
+      if (msg === '__HIGH_RISK__' && attempt < maxRetries) {
+        await new Promise(r => setTimeout(r, 2000))
+        continue
+      }
+      if (attempt === maxRetries) throw err
+      await new Promise(r => setTimeout(r, 1000))
+    }
+  }
+  throw new Error('Claude CLI 调用失败：重试次数已用完')
 }
 
 export interface ChatMessage {
@@ -99,16 +257,26 @@ export interface ContentPart {
 export async function callAI(
   config: AIConfig,
   messages: ChatMessage[],
-  options: { temperature?: number; maxTokens?: number; systemInstruction?: string } = {}
+  options: { temperature?: number; maxTokens?: number; systemInstruction?: string; noContinue?: boolean } = {}
 ): Promise<string> {
+  aiDebugLog(`callAI: provider=${config.provider}, messages=${messages.length}, noContinue=${options.noContinue}`)
   if (config.provider === 'claude-code') {
     const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user')
     if (!lastUserMsg) throw new Error('No user message')
-    // For CLI, extract the user text directly — no "User:" prefix
     const userText = typeof lastUserMsg.content === 'string'
       ? lastUserMsg.content
       : lastUserMsg.content.filter(p => p.type === 'text').map(p => p.text).join('')
-    return callClaudeCLI(userText, options.systemInstruction)
+    // If caller didn't specify a system instruction, detect from prompt content
+    let sysInstruction = options.systemInstruction
+    if (!sysInstruction) {
+      const promptLower = userText.toLowerCase()
+      if (promptLower.includes('markdown') || promptLower.includes('文档') || promptLower.includes('修改') || promptLower.includes('生成')) {
+        sysInstruction = MARKDOWN_SYSTEM_INSTRUCTION
+      } else {
+        sysInstruction = JSON_SYSTEM_INSTRUCTION
+      }
+    }
+    return callClaudeCLI(userText, sysInstruction, options.noContinue)
   }
 
   const providerConfig = PROVIDER_CONFIG[config.provider as Exclude<AIProvider, 'claude-code'>]
@@ -228,6 +396,9 @@ function cleanJsonString(raw: string): string {
   const lastBracket = text.lastIndexOf(']')
   if (firstBracket === -1 || lastBracket === -1) return text
   text = text.substring(firstBracket, lastBracket + 1)
+
+  // 修复连续双引号（AI 常见错误：""text"" → \"text\"）
+  text = text.replace(/"{2,}/g, '\\"')
 
   // 修复字符串值中的未转义控制字符
   text = text.replace(/"((?:[^"\\]|\\.)*)"/g, (match) => {
@@ -583,24 +754,65 @@ export interface DocumentResult {
 function buildDocumentPrompt(
   materials: { name: string; content: string }[],
   instruction: string,
-  template: string
+  template: string,
+  subjectName?: string
 ): string {
   const matContent = materials
-    .map((m) => `【${m.name}】\n${m.content.substring(0, 5000)}`)
+    .map((m) => `【资料：${m.name}】\n${m.content.substring(0, 6000)}`)
     .join('\n\n---\n\n')
-    .substring(0, 25000)
+    .substring(0, 20000)
 
-  const formatRules = `你是一位专业的期末考试复习资料整理专家。请根据学习资料生成一份系统的复习文档。
+  // 判断文科/理科
+  const scienceKeywords = ['数学', '物理', '化学', '生物', '计算机', '编程', '算法', '数据结构', '统计', '概率', '线性代数', '微积分', '力学', '电磁', '热学', '光学', '量子']
+  const isScience = subjectName && scienceKeywords.some(k => subjectName.includes(k))
+
+  const subjectGuide = isScience ? `
+## 理科专题结构（每个专题必须严格按此结构）
+
+### 每个专题的标准结构：
+1. **核心概念**：用一段话（100-200字）完整解释概念，给出严格定义
+2. **公式/定理**：列出所有相关公式，每个公式配完整推导过程（不是只写结论）
+3. **典型例题**（至少 2 道，必须包含完整解题步骤）：
+   - 例题1：基础题（附详细解题过程和每一步的解释）
+   - 例题2：进阶题（附详细解题过程和思路分析）
+4. **易错点**：列出 2-3 个常见错误，说明为什么错、正确做法是什么
+5. **练习题**（附完整答案和解析）：
+   - 选择题 2 道（答案 + 解析每个选项为什么对/错）
+   - 计算题 1 道（完整解题过程）
+6. **跨章节关联**：说明本节与哪些其他章节有联系` : `
+## 文科专题结构（每个专题必须严格按此结构）
+
+### 每个专题的标准结构：
+1. **核心概念**：完整阐述概念内涵、外延、历史背景（150-300字），引用原文关键表述
+2. **理论详解**：展开讲解理论内容，配具体案例或历史事件佐证（2-3个案例）
+3. **对比辨析**：与易混淆概念用表格对比（至少 3 个维度：定义、特征、适用场景）
+4. **多题型练习**（每题必须附完整答案和得分要点）：
+   - 简答题 2 道（答案 150-300字，包含关键词和得分点）
+   - 材料分析题 1 道（提供完整材料，答案按分步给分）
+   - 论述题 1 道（提供答题框架：论点→论据→总结）
+5. **答题模板**：常考题型的标准答题框架和范例答案`
+
+  const formatRules = `你是一位专业的学习资料整理助手。请根据以下学习资料，生成一份**结构完整、内容深入、题解详尽**的复习文档。
+
+**核心原则：忠实于资料**
+- 优先使用资料中的原文表述，不要自己编造内容
+- 资料中的知识点、公式、案例必须完整保留，不能省略
+- 引用原文时要标注来源
+
+**内容深度要求（必须遵守）**
+- 每个知识点：100-300字展开讲解，不能只给一句话定义
+- 每个公式/定理：给出完整推导过程，每一步都要有解释
+- 每个概念：配具体例子、实际应用场景
+- 每道练习题：必须附完整答案和详细解析，不能只给答案
+- 每个专题按标准结构组织：概念 → 公式/理论 → 例题 → 易错点 → 练习题（含答案）
 
 排版格式要求：
-1. **表格优先**：概念对比、参数、分类、步骤等事实性内容用 Markdown 表格呈现
-2. **箭头链**：流程、因果关系用 → 连接，如 "定义 → 公式 → 推导 → 应用"
-3. **高频考点标记**：🔥（高频考点）或 ⭐（必背考点）
+1. **表格优先**：概念对比、参数、分类用 Markdown 表格
+2. **箭头链**：流程用 → 连接，如 "定义 → 公式 → 推导 → 应用"
+3. **考点标记**：🔥（高频考点）或 ⭐（必背考点）
 4. **加粗关键词**：核心术语用 **加粗**
-5. **层级清晰**：# ## ### 标题层级，每个 ## 下不超过 5 个 ###
-6. **对比表格**：易混淆概念放在一起对比
-7. **每个专题**配 1-2 道模拟练习题 + 答案解析
-8. **文档末尾**加「核心对比表」和「考试自检清单」`
+5. **层级清晰**：# ## ### 标题层级
+6. **文档末尾**加「核心对比表」和「考试自检清单」`
 
   const templateExtras: Record<string, string> = {
     quick_ref: `
@@ -612,10 +824,46 @@ function buildDocumentPrompt(
     analysis: `
 材料分析题模式：每个专题以「场景→理论→练习→答案拆解」结构组织，答案按分步给分`,
 
+    deep_dive: `
+深度讲解模式：
+- 每个知识点必须展开为 300-500 字的深度讲解
+- 包含概念的来龙去脉：为什么提出这个概念、解决了什么问题
+- 用类比、比喻帮助理解抽象概念
+- 配合图表说明（用 Markdown 表格或 ASCII 图）
+- 每个定理/公式配完整推导过程，不能只写结论
+- 文末加「知识体系总结」，用思维导图式结构梳理`,
+
+    tutorial: `
+教程指南模式：
+- 以"Step by Step"的方式组织，从零开始逐步深入
+- 每个步骤配实际操作或计算示例
+- 用"小贴士"标注注意事项和常见陷阱
+- 配套练习题按难度递进排列（基础→进阶→挑战）
+- 每道题必须有完整解题过程和评分标准`,
+
+    lecture: `
+课堂讲解脚本模式：
+- 以口语化风格撰写，模拟老师讲课的语气
+- 每个知识点设计"开场白→讲解→互动提问→总结"的循环
+- 标注 [PPT 页码] 提示配合幻灯片使用
+- 穿插"同学们注意..."、"这里有个常见的误解..."等引导语
+- 每节结尾加"本节要点回顾"清单`,
+
+    explainer: `
+知识科普脚本模式：
+- 用生动有趣的语言解释专业知识
+- 以生活中的例子引入，再过渡到专业内容
+- 设计"你知道吗？"趣味知识框
+- 用类比和故事帮助记忆
+- 节奏感强，适合朗读，每段不超过 200 字
+- 标注 [配图] [动画] 等视觉提示`,
+
     custom: ``,
   }
 
   return `${formatRules}
+
+${subjectGuide}
 
 ${templateExtras[template] || ''}
 
@@ -632,10 +880,11 @@ export async function generateDocument(
   config: AIConfig,
   materials: { name: string; content: string }[],
   instruction: string,
-  template: string = 'general'
+  template: string = 'general',
+  subjectName?: string
 ): Promise<DocumentResult> {
-  const prompt = buildDocumentPrompt(materials, instruction, template)
-  const content = await callAI(config, [{ role: 'user', content: prompt }], { temperature: 0.5, maxTokens: 8192 })
+  const prompt = buildDocumentPrompt(materials, instruction, template, subjectName)
+  const content = await callAI(config, [{ role: 'user', content: prompt }], { temperature: 0.5, maxTokens: 16384 })
   if (!content) throw new Error('AI 返回内容为空')
 
   const titleMatch = content.match(/^#\s+(.+)/m)
@@ -654,23 +903,24 @@ export async function reviseDocument(
   if (materials && materials.length > 0) {
     materialContext = '\n\n## 参考资料（用于确保修改内容准确）\n'
     for (const mat of materials) {
-      materialContext += `\n### ${mat.name}\n${mat.content.substring(0, 3000)}\n`
+      materialContext += `\n### ${mat.name}\n${mat.content.substring(0, 2000)}\n`
     }
   }
 
-  const prompt = `你是一位专业的学习资料整理专家。用户对你生成的复习文档有修改意见，请根据用户要求修改文档。
+  // 截断原始内容，保留核心结构
+  const truncated = originalContent.length > 8000
+    ? originalContent.substring(0, 8000) + '\n\n[...文档较长，以上为前半部分，请基于此结构和用户要求进行修改，生成完整文档...]'
+    : originalContent
+
+  const prompt = `用户修改要求：${userMessage}
 
 当前文档内容：
-${originalContent.substring(0, 12000)}
+${truncated}
 ${materialContext}
 
-用户修改要求：${userMessage}
+请根据用户要求修改以上文档，返回修改后的完整 Markdown 文档。不要忽略用户的任何要求。`
 
-请根据用户要求修改文档。如果有参考资料，请参考资料内容确保修改的准确性。
-请返回修改后的完整 Markdown 文档。保持原有的高质量排版（表格优先、箭头链、高频考点标记等）。
-只返回修改后的完整 Markdown，不要包含其他说明。`
-
-  const content = await callAI(config, [{ role: 'user', content: prompt }], { temperature: 0.5, maxTokens: 8192 })
+  const content = await callAI(config, [{ role: 'user', content: prompt }], { temperature: 0.5, maxTokens: 16384 })
   if (!content) throw new Error('AI 返回内容为空')
   return content
 }

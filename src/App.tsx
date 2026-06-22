@@ -158,7 +158,7 @@ const App = () => {
       case 'quiz':
         return <QuizSession subjectId={currentSubjectId} key={refreshKey} />
       case 'content':
-        return <ContentGenerator subjectId={currentSubjectId} key={refreshKey} />
+        return <ContentGenerator subjectId={currentSubjectId} subjectName={currentSubject?.name} key={refreshKey} />
       case 'review':
         return <WrongBook subjectId={currentSubjectId} key={refreshKey} />
       case 'graph':

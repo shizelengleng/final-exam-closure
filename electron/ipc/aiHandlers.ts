@@ -1,5 +1,6 @@
 import { ipcMain } from 'electron'
 import { generateQuestions, chat, generateGraph, generateGraphFromContent, categorizeMaterial, selectMaterialsForGraph, manageSources, generateDocument, reviseDocument, AIProvider, GenerateQuestionParams } from '../services/aiClient'
+import { startOrchestration, resumeCheckpoint, cancelOrchestration, type OrchestrationInput } from '../services/documentOrchestrator'
 import { SearchSource } from '../services/searchEngine'
 import { readCollection, writeCollection, appendItem, updateItem, deleteItem } from '../db/store'
 import { reloadSearchEngine } from './searchHandlers'
@@ -71,7 +72,15 @@ export async function registerAIHandlers() {
 
   ipcMain.handle('ai:chat', async (_event, message: string) => {
     if (currentConfig.provider !== 'claude-code' && !currentConfig.apiKey) throw new Error('请先在设置中配置 API Key')
-    return chat(currentConfig, message)
+    console.log('[AI] chat called, provider:', currentConfig.provider, 'message length:', message.length)
+    try {
+      const result = await chat(currentConfig, message)
+      console.log('[AI] chat result length:', result.length)
+      return result
+    } catch (err) {
+      console.error('[AI] chat error:', err)
+      throw err
+    }
   })
 
   ipcMain.handle('ai:generateGraph', async (_event, subject: string) => {
@@ -127,13 +136,27 @@ export async function registerAIHandlers() {
     return result
   })
 
-  ipcMain.handle('ai:generateDocument', async (_event, materials: { name: string; content: string }[], instruction: string, template: string) => {
+  ipcMain.handle('ai:generateDocument', async (_event, materials: { name: string; content: string }[], instruction: string, template: string, subjectName?: string) => {
     if (currentConfig.provider !== 'claude-code' && !currentConfig.apiKey) throw new Error('请先在设置中配置 API Key')
-    return generateDocument(currentConfig, materials, instruction, template)
+    return generateDocument(currentConfig, materials, instruction, template, subjectName)
   })
 
   ipcMain.handle('ai:reviseDocument', async (_event, originalContent: string, userMessage: string, materials?: { name: string; content: string }[]) => {
     if (currentConfig.provider !== 'claude-code' && !currentConfig.apiKey) throw new Error('请先在设置中配置 API Key')
     return reviseDocument(currentConfig, originalContent, userMessage, materials)
+  })
+
+  // === Orchestration handlers ===
+  ipcMain.handle('ai:orchestrateDocument', async (event, input: OrchestrationInput) => {
+    if (currentConfig.provider !== 'claude-code' && !currentConfig.apiKey) throw new Error('请先在设置中配置 API Key')
+    return startOrchestration(event.sender, input, currentConfig)
+  })
+
+  ipcMain.handle('orchestrator:resume', async (_event, params: { orchestrationId: string; checkpoint: number; approved: boolean; userNotes?: string }) => {
+    return resumeCheckpoint(params.orchestrationId, params.checkpoint, params.approved, params.userNotes)
+  })
+
+  ipcMain.handle('orchestrator:cancel', async (_event, params: { orchestrationId: string }) => {
+    return cancelOrchestration(params.orchestrationId)
   })
 }

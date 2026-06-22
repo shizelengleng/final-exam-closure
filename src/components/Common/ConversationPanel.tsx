@@ -115,6 +115,7 @@ const ConversationPanel = ({
       setMessages(prev => [...prev, assistantMsg])
       saveMessage(assistantMsg)
     } catch (err) {
+      console.error('[ConversationPanel] AI error:', err)
       const errMsg = err instanceof Error ? err.message : '未知错误'
       const errorMsg: ChatMessage = {
         id: `msg_${Date.now() + 1}`,

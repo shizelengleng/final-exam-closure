@@ -1,4 +1,4 @@
-# 期末补完计划 (Final Exam Completer)
+# 期末补完计划 (Final Exam Closure)
 
 > AI 驱动的期末复习桌面应用
 
@@ -21,6 +21,7 @@
 
 ### 增强功能
 - **Wiki 知识库** - 从资料自动构建结构化知识库，支持概念提取、综合复习页、AI 对话
+- **智能文档生成** - 6 阶段编排流水线（素材分析→大纲→风格锚定→并行生成→终审→修复），3 个用户检查点，一键返工
 - **文档生成** - 自动生成结构化复习文档（Markdown/PDF），集成在 Wiki 中
 - **知识图谱** - 概念关系可视化，交互式图谱
 - **AI 答疑** - 基于资料库的对话式答疑
@@ -51,8 +52,8 @@
 
 ```bash
 # 克隆项目
-git clone https://github.com/shizelengleng/final-exam-completer.git
-cd final-exam-completer
+git clone https://github.com/shizelengleng/final-exam-closure.git
+cd final-exam-closure
 
 # 安装依赖
 npm install
@@ -98,7 +99,7 @@ npm run dist:linux
 ## 项目结构
 
 ```
-final-exam-completer/
+final-exam-closure/
 ├── electron/                # 主进程
 │   ├── main.ts             # 入口文件
 │   ├── preload.ts          # 预加载脚本
@@ -106,6 +107,7 @@ final-exam-completer/
 │   ├── ipc/                # IPC 通信
 │   ├── services/           # 服务层
 │   │   ├── aiClient.ts     # AI 调用
+│   │   ├── documentOrchestrator.ts # 智能文档编排（6阶段状态机）
 │   │   ├── searchEngine.ts # 搜索引擎核心
 │   │   ├── anysearch.ts    # AnySearch API 客户端
 │   │   ├── browserSearch.ts# 浏览器搜索 (Bing/Baidu)
@@ -117,8 +119,8 @@ final-exam-completer/
 │   ├── components/         # React 组件
 │   │   ├── Analysis/       # 薄弱点分析
 │   │   ├── Chat/           # AI 答疑
-│   │   ├── Common/         # 通用组件 (Header, Sidebar, FileViewer...)
-│   │   ├── Document/       # 文档生成
+│   │   ├── Common/         # 通用组件 (Header, Sidebar, FileViewer, ErrorBoundary...)
+│   │   ├── Content/        # 智能文档生成 (ContentGenerator, Checkpoint*, OrchestrationProgress...)
 │   │   ├── KnowledgeGraph/ # 知识图谱
 │   │   ├── Materials/      # 资料管理
 │   │   ├── Overview/       # 学科总览
@@ -130,7 +132,7 @@ final-exam-completer/
 │   ├── contexts/           # React Context (主题)
 │   ├── lib/                # 工具库
 │   │   └── classifier.ts   # 本地分类引擎
-│   ├── stores/             # 状态管理
+│   ├── stores/             # 状态管理 (orchestrationStore...)
 │   └── styles/             # 样式
 ├── config/                 # 配置文件
 └── package.json

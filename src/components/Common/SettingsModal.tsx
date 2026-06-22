@@ -386,7 +386,7 @@ const SettingsModal = ({ open, onClose }: SettingsModalProps) => {
               <span className="text-3xl text-white font-bold">F</span>
             </div>
             <h2 className="text-xl font-bold text-gray-800">期末补完计划</h2>
-            <p className="text-sm text-gray-500 mt-1">Final Exam Completer</p>
+            <p className="text-sm text-gray-500 mt-1">Final Exam Closure</p>
             <p className="text-xs text-gray-400 mt-1">v0.1.0</p>
           </div>
 
@@ -420,7 +420,7 @@ const SettingsModal = ({ open, onClose }: SettingsModalProps) => {
               </h3>
               <p className="text-xs text-gray-600 bg-white rounded p-2 font-mono break-all border border-gray-200">
                 {window.location.protocol === 'file:'
-                  ? 'C:\\Users\\123\\Desktop\\Skills For Real Engineers\\期末补完计划\\final-exam-completer'
+                  ? 'C:\\Users\\123\\Desktop\\Skills For Real Engineers\\期末补完计划\\final-exam-closure'
                   : import.meta.env.DEV
                   ? '开发模式运行中'
                   : '打包版本'}
@@ -433,12 +433,12 @@ const SettingsModal = ({ open, onClose }: SettingsModalProps) => {
                 GitHub
               </h3>
               <a
-                href="https://github.com/yizeleng/final-exam-completer"
+                href="https://github.com/shizelengleng/final-exam-closure"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-xs text-blue-500 hover:text-blue-600 bg-white rounded p-2 block border border-gray-200 hover:border-blue-300 transition-colors"
               >
-                github.com/yizeleng/final-exam-completer
+                github.com/shizelengleng/final-exam-closure
               </a>
             </div>
 
