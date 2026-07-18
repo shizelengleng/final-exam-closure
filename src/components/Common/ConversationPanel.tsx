@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { Input, Button, Spin, Empty, Tag, Tooltip, message, Modal } from 'antd'
 import { SendOutlined, RobotOutlined, UserOutlined, SaveOutlined, DeleteOutlined, ClearOutlined } from '@ant-design/icons'
-import { marked } from 'marked'
+import { renderMarkdown } from '../../lib/markdown'
 import { useTheme } from '../../contexts/ThemeContext'
 
 interface ChatMessage {
@@ -232,7 +232,7 @@ const ConversationPanel = ({
                   color: msg.role === 'user' ? 'white' : theme.colors.text,
                 }}>
                   {msg.role === 'assistant' ? (
-                    <div className="prose prose-sm max-w-none" dangerouslySetInnerHTML={{ __html: marked.parse(msg.content) as string }} />
+                    <div className="prose prose-sm max-w-none" dangerouslySetInnerHTML={renderMarkdown(msg.content)} />
                   ) : (
                     <span className="text-sm whitespace-pre-wrap leading-relaxed">{msg.content}</span>
                   )}

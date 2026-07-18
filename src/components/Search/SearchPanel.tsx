@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Input, Button, Card, Tag, Empty, Checkbox, Spin, message, Collapse } from 'antd'
 import { SearchOutlined, DownloadOutlined, StarOutlined, LinkOutlined, FileTextOutlined, UpOutlined, DownOutlined } from '@ant-design/icons'
-import { marked } from 'marked'
+import { renderMarkdown } from '../../lib/markdown'
 
 interface SearchPanelProps {
   subjectId: string
@@ -236,7 +236,7 @@ const SearchPanel = ({ subjectId }: SearchPanelProps) => {
           ) : (
             <div
               className="prose prose-sm max-w-none text-sm text-gray-700 leading-relaxed max-h-96 overflow-auto"
-              dangerouslySetInnerHTML={{ __html: marked.parse(expandedContent) as string }}
+              dangerouslySetInnerHTML={renderMarkdown(expandedContent)}
             />
           )}
         </div>

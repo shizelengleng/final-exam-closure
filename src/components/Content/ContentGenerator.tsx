@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { Button, Select, Input, Switch, message, Empty, Tag, Space, Dropdown } from 'antd'
 import { HistoryOutlined } from '@ant-design/icons'
 import { FileTextOutlined, AudioOutlined, VideoCameraOutlined, SaveOutlined, ExportOutlined, DownloadOutlined, CheckOutlined, ThunderboltOutlined } from '@ant-design/icons'
-import { marked } from 'marked'
+import { renderMarkdown } from '../../lib/markdown'
 import ConversationPanel from '../Common/ConversationPanel'
 import MaterialPicker from '../Common/MaterialPicker'
 import OrchestrationProgress from './OrchestrationProgress'
@@ -417,7 +417,7 @@ const ContentGenerator = ({ subjectId, subjectName, defaultMode = 'document' }: 
             {/* Content */}
             <div className="flex-1 overflow-auto p-6">
               <div className="prose prose-sm max-w-none"
-                dangerouslySetInnerHTML={{ __html: marked.parse(generatedContent) as string }} />
+                dangerouslySetInnerHTML={renderMarkdown(generatedContent)} />
             </div>
           </>
         ) : (

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Empty, Spin, Tag, Button, message, Collapse, Modal, Checkbox, Input } from 'antd'
 import { BookOutlined, BulbOutlined, ApartmentOutlined, ReloadOutlined, CloudDownloadOutlined, FilePdfOutlined, FileWordOutlined, DeleteOutlined, ArrowLeftOutlined } from '@ant-design/icons'
-import { marked } from 'marked'
+import { renderMarkdown } from '../../lib/markdown'
 import WikiBuildChat from './WikiBuildChat'
 
 interface WikiBrowserProps {
@@ -178,9 +178,9 @@ const WikiBrowser = ({ subjectId }: WikiBrowserProps) => {
     source: pages.filter(p => p.type === 'source'),
   }
 
-  const renderMarkdown = (content: string) => {
+  const renderPage = (content: string) => {
     const withoutFrontmatter = content.replace(/^---[\s\S]*?---\n*/, '')
-    return { __html: marked(withoutFrontmatter) as string }
+    return renderMarkdown(withoutFrontmatter)
   }
 
   return (
@@ -317,7 +317,7 @@ const WikiBrowser = ({ subjectId }: WikiBrowserProps) => {
                 </div>
                 <div
                   className="prose prose-sm max-w-none"
-                  dangerouslySetInnerHTML={renderMarkdown(pageContent)}
+                  dangerouslySetInnerHTML={renderPage(pageContent)}
                 />
               </div>
             )

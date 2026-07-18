@@ -5,7 +5,7 @@ import {
   BookOutlined, CodeOutlined, EditOutlined, EyeOutlined,
   SearchOutlined, GlobalOutlined,
 } from '@ant-design/icons'
-import { marked } from 'marked'
+import { renderMarkdown } from '../../lib/markdown'
 import { useTheme } from '../../contexts/ThemeContext'
 
 interface ChatMessage {
@@ -275,13 +275,6 @@ Wiki 目标路径：wiki/${subjectName || subjectId}/
     }
   }
 
-  const renderMarkdown = (content: string) => {
-    try {
-      return { __html: marked.parse(content, { breaks: true }) as string }
-    } catch {
-      return { __html: content }
-    }
-  }
 
   const renderMessage = (msg: ChatMessage) => {
     if (msg.role === 'tool') {

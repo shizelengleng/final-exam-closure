@@ -7,7 +7,7 @@ import {
   FilePdfOutlined, FileWordOutlined, FileImageOutlined, SearchOutlined,
   CodeOutlined, EditOutlined, FolderOpenOutlined, EyeOutlined,
 } from '@ant-design/icons'
-import { marked } from 'marked'
+import { renderMarkdown } from '../../lib/markdown'
 import { useTheme } from '../../contexts/ThemeContext'
 
 interface ChatMessage {
@@ -332,13 +332,6 @@ const ClaudeChat = ({ subjectId, subjectName }: ClaudeChatProps) => {
     window.electron?.claude.removeListeners()
   }
 
-  const renderMarkdown = (content: string) => {
-    try {
-      return { __html: marked.parse(content, { breaks: true }) as string }
-    } catch {
-      return { __html: content }
-    }
-  }
 
   const selectedMats = materials.filter(m => selectedMaterialIds.includes(m.id))
   const filteredMaterials = materialSearch

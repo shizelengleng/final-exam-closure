@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { Tag, Button, Typography, Collapse } from 'antd'
 import { StopOutlined, CheckCircleOutlined, LoadingOutlined, WarningOutlined } from '@ant-design/icons'
-import { marked } from 'marked'
+import { renderMarkdown } from '../../lib/markdown'
 import { useOrchestrationStore } from '../../stores/orchestrationStore'
 
 const { Text } = Typography
@@ -134,7 +134,7 @@ const OrchestrationProgress = ({
                     children: (
                       <div
                         className="prose prose-xs max-w-none text-gray-600"
-                        dangerouslySetInnerHTML={{ __html: marked.parse(t.preview + '...') as string }}
+                        dangerouslySetInnerHTML={renderMarkdown(t.preview + '...')}
                       />
                     ),
                   }))}
@@ -155,7 +155,7 @@ const OrchestrationProgress = ({
                   <div className="bg-white rounded-lg p-4 max-h-[400px] overflow-auto border border-blue-100">
                     <div
                       className="prose prose-sm max-w-none"
-                      dangerouslySetInnerHTML={{ __html: marked.parse(liveContent) as string }}
+                      dangerouslySetInnerHTML={renderMarkdown(liveContent)}
                     />
                     <div ref={contentEndRef} />
                   </div>
