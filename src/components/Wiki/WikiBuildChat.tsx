@@ -128,6 +128,8 @@ Wiki 目标路径：wiki/${subjectName || subjectId}/
 
     let fullText = ''
 
+    window.electron?.claude.removeListeners()
+
     window.electron?.claude.onDelta((data: { subjectId: string; delta: string }) => {
       if (data.subjectId !== subjectId) return
       fullText += data.delta

@@ -22,6 +22,12 @@ interface SessionData {
 const STREAM_TIMEOUT = 300_000   // 5 min hard timeout
 const STALL_TIMEOUT = 120_000    // 2 min no-data stall
 
+function assertSafeId(id: string, label: string): void {
+  if (!id || id.includes('..') || path.isAbsolute(id) || /[\\/:*?"<>|]/.test(id)) {
+    throw new Error(`Invalid ${label}: ${id}`)
+  }
+}
+
 let sessionsDir: string | null = null
 let appSkillsDir: string | null = null
 const activeProcesses = new Map<string, ChildProcess>()
@@ -122,6 +128,8 @@ function parseStreamLine(line: string): Record<string, unknown> | null {
 
 // 获取或创建学科会话
 export async function getOrCreateSession(subjectId: string, sessionKey?: string): Promise<SessionInfo> {
+  assertSafeId(subjectId, 'subjectId')
+  if (sessionKey) assertSafeId(sessionKey, 'sessionKey')
   const existing = await readSessionData(subjectId, sessionKey)
   if (existing) {
     return {
@@ -163,6 +171,8 @@ export async function sendMessage(
   sessionKey?: string,
   timeout?: number,
 ): Promise<void> {
+  assertSafeId(subjectId, 'subjectId')
+  if (sessionKey) assertSafeId(sessionKey, 'sessionKey')
   const workspace = await ensureWorkspace(subjectId)
   const sessionData = await readSessionData(subjectId, sessionKey)
   const sessionId = sessionData?.sessionId || null
@@ -295,6 +305,8 @@ export async function sendMessage(
 
 // 停止正在进行的对话
 export function stopMessage(subjectId: string, sessionKey?: string): boolean {
+  assertSafeId(subjectId, 'subjectId')
+  if (sessionKey) assertSafeId(sessionKey, 'sessionKey')
   const processKey = getProcessKey(subjectId, sessionKey)
   const child = activeProcesses.get(processKey)
   if (child) {
@@ -307,6 +319,8 @@ export function stopMessage(subjectId: string, sessionKey?: string): boolean {
 
 // 清空会话
 export async function clearSession(subjectId: string, sessionKey?: string): Promise<void> {
+  assertSafeId(subjectId, 'subjectId')
+  if (sessionKey) assertSafeId(sessionKey, 'sessionKey')
   const sessionDir = getSessionDir(subjectId, sessionKey)
   try {
     await fs.promises.rm(sessionDir, { recursive: true, force: true })
@@ -361,6 +375,7 @@ export async function prepareWikiWorkspace(
   subjectId: string,
   materials: { name: string; content: string }[],
 ): Promise<{ success: boolean; wikiDir?: string; error?: string }> {
+  assertSafeId(subjectId, 'subjectId')
   try {
     const workspace = await ensureWorkspace(subjectId)
     const wikiDir = await getWikiDirForSubject(subjectId)
@@ -409,6 +424,7 @@ export async function prepareWikiWorkspace(
 
 // 清理 Wiki 构建工作区
 export async function cleanupWikiWorkspace(subjectId: string): Promise<void> {
+  assertSafeId(subjectId, 'subjectId')
   try {
     const workspace = getWorkspace(subjectId)
 

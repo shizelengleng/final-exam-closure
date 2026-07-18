@@ -34,24 +34,40 @@ contextBridge.exposeInMainWorld('electron', {
     orchestrateDocument: (materials: { name: string; content: string }[], instruction: string, template: string, subjectName?: string) =>
       ipcRenderer.invoke('ai:orchestrateDocument', { materials, instruction, template, subjectName }),
   },
-  orchestrator: {
-    resume: (params: { orchestrationId: string; checkpoint: number; approved: boolean; userNotes?: string }) =>
-      ipcRenderer.invoke('orchestrator:resume', params),
-    cancel: (params: { orchestrationId: string }) =>
-      ipcRenderer.invoke('orchestrator:cancel', params),
-    onProgress: (callback: (snapshot: unknown) => void) => {
-      ipcRenderer.on('orchestrator:progress', (_event, snapshot) => callback(snapshot))
-    },
-    removeProgressListener: () => {
-      ipcRenderer.removeAllListeners('orchestrator:progress')
-    },
-    onStreamEvent: (callback: (event: unknown) => void) => {
-      ipcRenderer.on('orchestrator:stream-event', (_event, streamEvent) => callback(streamEvent))
-    },
-    removeStreamListener: () => {
-      ipcRenderer.removeAllListeners('orchestrator:stream-event')
-    },
-  },
+  orchestrator: (() => {
+    const tracked = new Map<string, (...args: unknown[]) => void>()
+    function track(channel: string, callback: (...args: unknown[]) => void) {
+      const wrapper = (_event: Electron.IpcRendererEvent, ...args: unknown[]) => callback(...args)
+      tracked.set(channel, wrapper)
+      ipcRenderer.on(channel, wrapper)
+    }
+    return {
+      resume: (params: { orchestrationId: string; checkpoint: number; approved: boolean; userNotes?: string }) =>
+        ipcRenderer.invoke('orchestrator:resume', params),
+      cancel: (params: { orchestrationId: string }) =>
+        ipcRenderer.invoke('orchestrator:cancel', params),
+      onProgress: (callback: (snapshot: unknown) => void) => {
+        track('orchestrator:progress', callback as (...args: unknown[]) => void)
+      },
+      removeProgressListener: () => {
+        const wrapper = tracked.get('orchestrator:progress')
+        if (wrapper) {
+          ipcRenderer.removeListener('orchestrator:progress', wrapper)
+          tracked.delete('orchestrator:progress')
+        }
+      },
+      onStreamEvent: (callback: (event: unknown) => void) => {
+        track('orchestrator:stream-event', callback as (...args: unknown[]) => void)
+      },
+      removeStreamListener: () => {
+        const wrapper = tracked.get('orchestrator:stream-event')
+        if (wrapper) {
+          ipcRenderer.removeListener('orchestrator:stream-event', wrapper)
+          tracked.delete('orchestrator:stream-event')
+        }
+      },
+    }
+  })(),
   search: {
     query: (keyword: string, sourceIds?: string[]) =>
       ipcRenderer.invoke('search:query', keyword, sourceIds),
@@ -150,31 +166,39 @@ contextBridge.exposeInMainWorld('electron', {
     clearHistory: (subjectId: string, historyType: string) =>
       ipcRenderer.invoke('context:clearHistory', subjectId, historyType),
   },
-  claude: {
-    getSession: (subjectId: string, sessionKey?: string) => ipcRenderer.invoke('claude:getSession', { subjectId, sessionKey }),
-    sendMessage: (subjectId: string, message: string, sessionKey?: string, timeout?: number) => ipcRenderer.invoke('claude:sendMessage', { subjectId, message, sessionKey, timeout }),
-    clearSession: (subjectId: string, sessionKey?: string) => ipcRenderer.invoke('claude:clearSession', { subjectId, sessionKey }),
-    stopMessage: (subjectId: string, sessionKey?: string) => ipcRenderer.invoke('claude:stopMessage', { subjectId, sessionKey }),
-    listSessions: () => ipcRenderer.invoke('claude:listSessions'),
-    onDelta: (callback: (data: { subjectId: string; delta: string }) => void) => {
-      ipcRenderer.on('claude:stream-delta', (_event, data) => callback(data))
-    },
-    onComplete: (callback: (data: { subjectId: string; fullText: string; sessionId: string | null }) => void) => {
-      ipcRenderer.on('claude:stream-complete', (_event, data) => callback(data))
-    },
-    onError: (callback: (data: { subjectId: string; error: string }) => void) => {
-      ipcRenderer.on('claude:stream-error', (_event, data) => callback(data))
-    },
-    onToolUse: (callback: (data: { subjectId: string; toolName: string; toolInput: Record<string, unknown> }) => void) => {
-      ipcRenderer.on('claude:stream-tool', (_event, data) => callback(data))
-    },
-    removeListeners: () => {
-      ipcRenderer.removeAllListeners('claude:stream-delta')
-      ipcRenderer.removeAllListeners('claude:stream-complete')
-      ipcRenderer.removeAllListeners('claude:stream-error')
-      ipcRenderer.removeAllListeners('claude:stream-tool')
-    },
-  },
+  claude: (() => {
+    const tracked = new Map<string, (...args: unknown[]) => void>()
+    function track(channel: string, callback: (...args: unknown[]) => void) {
+      const wrapper = (_event: Electron.IpcRendererEvent, ...args: unknown[]) => callback(...args)
+      tracked.set(channel, wrapper)
+      ipcRenderer.on(channel, wrapper)
+    }
+    return {
+      getSession: (subjectId: string, sessionKey?: string) => ipcRenderer.invoke('claude:getSession', { subjectId, sessionKey }),
+      sendMessage: (subjectId: string, message: string, sessionKey?: string, timeout?: number) => ipcRenderer.invoke('claude:sendMessage', { subjectId, message, sessionKey, timeout }),
+      clearSession: (subjectId: string, sessionKey?: string) => ipcRenderer.invoke('claude:clearSession', { subjectId, sessionKey }),
+      stopMessage: (subjectId: string, sessionKey?: string) => ipcRenderer.invoke('claude:stopMessage', { subjectId, sessionKey }),
+      listSessions: () => ipcRenderer.invoke('claude:listSessions'),
+      onDelta: (callback: (data: { subjectId: string; delta: string }) => void) => {
+        track('claude:stream-delta', callback as (...args: unknown[]) => void)
+      },
+      onComplete: (callback: (data: { subjectId: string; fullText: string; sessionId: string | null }) => void) => {
+        track('claude:stream-complete', callback as (...args: unknown[]) => void)
+      },
+      onError: (callback: (data: { subjectId: string; error: string }) => void) => {
+        track('claude:stream-error', callback as (...args: unknown[]) => void)
+      },
+      onToolUse: (callback: (data: { subjectId: string; toolName: string; toolInput: Record<string, unknown> }) => void) => {
+        track('claude:stream-tool', callback as (...args: unknown[]) => void)
+      },
+      removeListeners: () => {
+        for (const [channel, wrapper] of tracked) {
+          ipcRenderer.removeListener(channel, wrapper)
+        }
+        tracked.clear()
+      },
+    }
+  })(),
   skill: {
     list: () => ipcRenderer.invoke('skill:list'),
     toggle: (id: string, enabled: boolean) => ipcRenderer.invoke('skill:toggle', { id, enabled }),

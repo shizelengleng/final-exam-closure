@@ -39,16 +39,29 @@ async function getAccessToken(): Promise<string> {
 
   if (cachedToken && Date.now() < tokenExpiry) return cachedToken
 
-  const url = `https://aip.baidubce.com/oauth/2.0/token?grant_type=client_credentials&client_id=${config.apiKey}&client_secret=${config.secretKey}`
+  const postData = `grant_type=client_credentials&client_id=${config.apiKey}&client_secret=${config.secretKey}`
 
   const result = await new Promise<any>((resolve, reject) => {
-    https.get(url, (res) => {
+    const req = https.request('https://aip.baidubce.com/oauth/2.0/token', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Content-Length': Buffer.byteLength(postData),
+      },
+    }, (res) => {
       let data = ''
       res.on('data', (chunk) => data += chunk)
       res.on('end', () => {
+        if (res.statusCode && res.statusCode >= 400) {
+          reject(new Error(`Token 请求失败: HTTP ${res.statusCode}`))
+          return
+        }
         try { resolve(JSON.parse(data)) } catch { reject(new Error('Failed to parse token response')) }
       })
-    }).on('error', reject)
+    })
+    req.on('error', reject)
+    req.write(postData)
+    req.end()
   })
 
   if (!result.access_token) {

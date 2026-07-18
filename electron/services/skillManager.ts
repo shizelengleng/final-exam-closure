@@ -32,6 +32,12 @@ const BUILTIN_SKILLS: Record<string, { src: string; name: string; description: s
 let skillsDir: string | null = null
 let claudeDir: string | null = null
 
+function assertSafeId(id: string): void {
+  if (!id || id.includes('..') || path.isAbsolute(id) || /[\\/:*?"<>|]/.test(id)) {
+    throw new Error(`Invalid skill id: ${id}`)
+  }
+}
+
 function getClaudeDir(): string {
   if (!claudeDir) {
     claudeDir = path.join(app.getPath('userData'), '.claude')
@@ -128,6 +134,7 @@ export async function listSkills(): Promise<SkillInfo[]> {
 
 // 启用/禁用 skill（重命名目录）
 export async function toggleSkill(id: string, enabled: boolean): Promise<void> {
+  assertSafeId(id)
   const dir = getSkillsDir()
   const skillPath = path.join(dir, id)
   const disabledPath = path.join(dir, `${id}.disabled`)
@@ -151,6 +158,7 @@ export async function addSkill(sourcePath: string): Promise<SkillInfo> {
   // 读取源目录的 manifest 获取 id
   const manifest = await readManifest(sourcePath)
   const id = manifest.name || path.basename(sourcePath)
+  assertSafeId(id)
   const target = path.join(dir, id)
 
   if (await pathExists(target)) {
@@ -171,6 +179,7 @@ export async function addSkill(sourcePath: string): Promise<SkillInfo> {
 
 // 删除 skill
 export async function removeSkill(id: string): Promise<void> {
+  assertSafeId(id)
   const dir = getSkillsDir()
   const skillPath = path.join(dir, id)
   const disabledPath = path.join(dir, `${id}.disabled`)
