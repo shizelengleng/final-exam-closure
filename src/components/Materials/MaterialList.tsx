@@ -57,13 +57,20 @@ const MaterialList = ({ subjectId }: MaterialListProps) => {
   const [ocrProgress, setOcrProgress] = useState<{ current: string; remaining: number } | null>(null)
   const ocrQueueRef = useRef<string[]>([])
   const ocrProcessingRef = useRef(false)
+  const ocrCancelledRef = useRef(false)
   const ocrEngineRef = useRef<Record<string, 'tesseract' | 'baidu'>>({})
+
+  // Cancel OCR queue on unmount
+  useEffect(() => {
+    return () => { ocrCancelledRef.current = true }
+  }, [])
 
   const processOcrQueue = useCallback(async () => {
     if (ocrProcessingRef.current) return
     ocrProcessingRef.current = true
+    ocrCancelledRef.current = false
 
-    while (ocrQueueRef.current.length > 0) {
+    while (ocrQueueRef.current.length > 0 && !ocrCancelledRef.current) {
       const materialId = ocrQueueRef.current.shift()!
       console.log('[OCR Queue] Processing:', materialId)
       // Read from db to avoid stale closure
@@ -401,26 +408,13 @@ const MaterialList = ({ subjectId }: MaterialListProps) => {
     }
     if (!hasFile) {
       return (
-        <>
-          <Button
-            type="text"
-            size="small"
-            icon={<UploadOutlined className="text-gray-400" />}
-            onClick={() => { setReuploadTarget(item.id); fileInputRef.current?.click() }}
-            title="文件缺失，点击重新上传"
-          />
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".pdf"
-            style={{ display: 'none' }}
-            onChange={(e) => {
-              const file = e.target.files?.[0]
-              if (file && reuploadTarget) handleReupload(reuploadTarget, file)
-              e.target.value = ''
-            }}
-          />
-        </>
+        <Button
+          type="text"
+          size="small"
+          icon={<UploadOutlined className="text-gray-400" />}
+          onClick={() => { setReuploadTarget(item.id); fileInputRef.current?.click() }}
+          title="文件缺失，点击重新上传"
+        />
       )
     }
     if (state === 'error') {
@@ -591,6 +585,18 @@ const MaterialList = ({ subjectId }: MaterialListProps) => {
 
   return (
     <div className="flex h-full gap-4 p-6">
+      {/* Single hidden file input for re-upload */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".pdf"
+        style={{ display: 'none' }}
+        onChange={(e) => {
+          const file = e.target.files?.[0]
+          if (file && reuploadTarget) handleReupload(reuploadTarget, file)
+          e.target.value = ''
+        }}
+      />
       {/* Left: Tag Sidebar */}
       <div className="w-52 flex-shrink-0 bg-white rounded-xl p-4 shadow-sm flex flex-col">
         <div className="flex items-center justify-between mb-3">
