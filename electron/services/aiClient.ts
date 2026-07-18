@@ -946,12 +946,14 @@ async function* streamClaudeCLI(
   })
 
   let settled = false
+  let settleReason: 'timeout' | 'stall' | 'normal' = 'normal'
   let lastChunkTime = Date.now()
 
   // Hard timeout
   const timer = setTimeout(() => {
     if (!settled) {
       settled = true
+      settleReason = 'timeout'
       child.kill('SIGTERM')
       aiDebugLog('streamClaudeCLI: TIMEOUT after 300s')
     }
@@ -961,6 +963,7 @@ async function* streamClaudeCLI(
   const stallCheck = setInterval(() => {
     if (!settled && Date.now() - lastChunkTime > 120000) {
       settled = true
+      settleReason = 'stall'
       child.kill('SIGTERM')
       clearInterval(stallCheck)
       clearTimeout(timer)
@@ -1047,6 +1050,12 @@ async function* streamClaudeCLI(
     }
   }
 
+  if (settleReason === 'timeout') {
+    throw new Error('Claude CLI 响应超时（300s）')
+  }
+  if (settleReason === 'stall') {
+    throw new Error('Claude CLI 响应停滞（120s 无数据）')
+  }
   if (!yieldedText) {
     aiDebugLog('streamClaudeCLI: WARNING - no text content yielded')
   }
