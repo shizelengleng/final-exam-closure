@@ -1,5 +1,7 @@
 import type { AIConfig } from './aiClient'
-import { callAI } from './aiClient'
+import { callAI, streamAI } from './aiClient'
+import { GenerationSession } from './generationSession'
+import { streamBroker, type StreamEvent } from './streamBroker'
 import { appendFileSync } from 'fs'
 import { join } from 'path'
 
@@ -20,15 +22,6 @@ export type PhaseName =
   | 'parallel_generation'
   | 'final_review'
   | 'repair_output'
-
-const PHASE_LABELS: Record<PhaseId, string> = {
-  0: '素材分析',
-  1: '大纲规划',
-  2: '风格锚定',
-  3: '并行生成',
-  4: '终审检查',
-  5: '修复输出',
-}
 
 // === Knowledge point from Phase 0 ===
 export interface KnowledgePoint {
@@ -264,28 +257,6 @@ function parseJsonFromAI<T>(raw: string): T {
     }
     throw e
   }
-}
-
-// Concurrency limiter
-async function runWithConcurrency<T>(
-  tasks: (() => Promise<T>)[],
-  concurrency: number,
-  onProgress?: (index: number, result: T) => void
-): Promise<T[]> {
-  const results: T[] = new Array(tasks.length)
-  let nextIndex = 0
-
-  async function runNext(): Promise<void> {
-    while (nextIndex < tasks.length) {
-      const i = nextIndex++
-      results[i] = await tasks[i]()
-      onProgress?.(i, results[i])
-    }
-  }
-
-  const workers = Array.from({ length: Math.min(concurrency, tasks.length) }, () => runNext())
-  await Promise.all(workers)
-  return results
 }
 
 // === Checkpoint mechanism ===
@@ -566,10 +537,13 @@ async function phase2StyleAnchor(
   const relevantMats = materials.filter(m =>
     firstTopic.materialRefs.some(ref => m.name.includes(ref))
   )
+  // For Claude CLI, use smaller context (no prompt caching benefit)
+  const maxPerMat = config.provider === 'claude-code' ? 3000 : 6000
+  const maxTotal = config.provider === 'claude-code' ? 6000 : 12000
   const matContent = (relevantMats.length > 0 ? relevantMats : materials)
-    .map(m => `【${m.name}】\n${m.content.substring(0, 6000)}`)
+    .map(m => `【${m.name}】\n${m.content.substring(0, maxPerMat)}`)
     .join('\n\n---\n\n')
-    .substring(0, 12000)
+    .substring(0, maxTotal)
 
   const prompt = `你是一位专业的复习文档撰写专家。请根据以下文档大纲，完整撰写第一个专题的内容，作为后续专题的写作范本。
 
@@ -597,38 +571,70 @@ ${matContent}
 
 请直接返回该专题的完整 Markdown 内容，不要包含其他说明文字。`
 
-  let retries = 1
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    if (state.cancelled) throw new Error('cancelled')
+  if (state.cancelled) throw new Error('cancelled')
 
-    debugLog(`Phase 2: calling AI (attempt ${attempt + 1}, maxTokens=16384)`)
-    const t2 = Date.now()
-    const content = await callAI(config, [{ role: 'user', content: prompt }], {
+  // Publish stream start event for Phase 2
+  streamBroker.publish(state.id, {
+    type: 'topic_start',
+    topicId: '__style_anchor__',
+    topicTitle: firstTopic.title,
+    index: 0,
+    total: 1,
+  })
+
+  debugLog(`Phase 2: streaming AI call, maxTokens=16384`)
+  const t2 = Date.now()
+  let content = ''
+
+  try {
+    for await (const delta of streamAI(config, [{ role: 'user', content: prompt }], {
       temperature: 0.5,
       maxTokens: 16384,
+    })) {
+      if (state.cancelled) break
+      content += delta
+      streamBroker.publish(state.id, {
+        type: 'content_delta',
+        topicId: '__style_anchor__',
+        delta,
+        accumulated: content,
+      })
+    }
+  } catch (err) {
+    streamBroker.publish(state.id, {
+      type: 'error',
+      topicId: '__style_anchor__',
+      message: (err as Error).message,
     })
-    debugLog(`Phase 2: AI returned ${content.length} chars in ${Date.now() - t2}ms`)
-
-    if (!content || content.length < 200) {
-      if (attempt === retries) throw new Error('Phase 2: 生成内容过短')
-      await new Promise(r => setTimeout(r, 1000))
-      continue
-    }
-
-    const anchor: StyleAnchor = {
-      topicId: firstTopic.id,
-      content,
-      structuralElements: extractHeadings(content),
-      wordCount: content.length,
-    }
-
-    const check = checkStyleAnchor(anchor)
-    setQualityResult(state, check.passed, check.issues)
-
-    return anchor
+    throw err
   }
 
-  throw new Error('Phase 2: 风格锚定失败')
+  debugLog(`Phase 2: streaming done, ${content.length} chars in ${Date.now() - t2}ms`)
+
+  if (!content || content.length < 200) {
+    throw new Error('Phase 2: 生成内容过短')
+  }
+
+  const anchor: StyleAnchor = {
+    topicId: firstTopic.id,
+    content,
+    structuralElements: extractHeadings(content),
+    wordCount: content.length,
+  }
+
+  const check = checkStyleAnchor(anchor)
+  setQualityResult(state, check.passed, check.issues)
+
+  streamBroker.publish(state.id, {
+    type: 'topic_complete',
+    topicId: '__style_anchor__',
+    topicTitle: firstTopic.title,
+    content,
+    qualityPassed: check.passed,
+    qualityIssues: check.issues,
+  })
+
+  return anchor
 }
 
 function extractHeadings(content: string): string[] {
@@ -655,7 +661,7 @@ function checkStyleAnchor(anchor: StyleAnchor): { passed: boolean; issues: strin
 }
 
 // ===================================================================
-// Phase 3: Parallel Generation
+// Phase 3: Streaming Session Generation
 // ===================================================================
 async function phase3ParallelGeneration(
   state: OrchestrationState,
@@ -663,197 +669,149 @@ async function phase3ParallelGeneration(
   plan: DocumentPlan,
   anchor: StyleAnchor
 ): Promise<TopicContent[]> {
-  const { materials, subjectName } = state.input
-  const topics = plan.topics.slice(1) // Skip first topic (already generated as anchor)
+  // Skip the first topic — Phase 2 already generated it as the style anchor
+  const remainingTopics = plan.topics.slice(1)
+  const totalTopics = plan.topics.length // total for progress display
 
-  if (topics.length === 0) {
-    // Only one topic in plan, return just the anchor
-    return [{
-      topicId: anchor.topicId,
-      topicTitle: plan.topics[0].title,
-      content: anchor.content,
-      qualityPassed: true,
-      qualityIssues: [],
-    }]
-  }
-
-  // Build style anchor summary (structural template for other generators)
-  const anchorSummary = buildAnchorSummary(anchor, plan)
-
-  const concurrency = config.provider === 'claude-code' ? 2 : 3
-  const totalTopics = plan.topics.length
-
-  // Set initial progress
-  state.snapshot.phaseProgress = { current: 0, total: totalTopics, label: `生成专题 0/${totalTopics}` }
-  sendProgress(state)
-
-  const topicResults: TopicContent[] = [{
+  // Reuse Phase 2's anchor as the first topic result
+  const firstTopicResult: TopicContent = {
     topicId: anchor.topicId,
     topicTitle: plan.topics[0].title,
     content: anchor.content,
     qualityPassed: true,
     qualityIssues: [],
-  }]
+  }
 
-  // Generate remaining topics with concurrency control
-  const tasks = topics.map((topicPlan, idx) => async (): Promise<TopicContent> => {
-    return generateSingleTopic(state, config, plan, topicPlan, anchorSummary, materials, subjectName)
-  })
+  debugLog(`Phase 3: reusing Phase 2 anchor as topic 1 (${anchor.wordCount} chars), generating ${remainingTopics.length} remaining topics`)
 
-  const results = await runWithConcurrency(tasks, concurrency, (idx, result) => {
-    topicResults.push(result)
-    state.snapshot.phaseProgress = {
-      current: idx + 1,
-      total: topics.length,
-      label: `生成专题 ${idx + 1}/${topics.length}`,
-    }
-    sendProgress(state)
-  })
+  // Set initial progress (1 done from Phase 2)
+  state.snapshot.phaseProgress = { current: 1, total: totalTopics, label: `生成专题 1/${totalTopics}（复用风格锚点）` }
+  sendProgress(state)
 
-  // Check for failed topics and retry once
-  const failedTopics = results.filter(r => !r.qualityPassed)
-  if (failedTopics.length > 0) {
-    for (const failed of failedTopics) {
+  if (remainingTopics.length === 0) {
+    return [firstTopicResult]
+  }
+
+  // Create a single session with all context (system message sent once)
+  const session = new GenerationSession(config, state.input, plan, anchor, state.id)
+  debugLog(`Phase 3: session created, system prompt ${session.getSystemPromptLength()} chars`)
+
+  const topicResults: TopicContent[] = [firstTopicResult]
+
+  // Generate remaining topics — use concurrency=2 with shared session for cache hit
+  const concurrency = config.provider === 'claude-code' ? 1 : 2
+
+  if (concurrency === 1 || remainingTopics.length <= 2) {
+    // Sequential generation (Claude CLI or few topics)
+    for (let i = 0; i < remainingTopics.length; i++) {
       if (state.cancelled) break
-      const topicPlan = topics.find(t => t.id === failed.topicId)
-      if (!topicPlan) continue
-
-      const retryResult = await generateSingleTopic(state, config, plan, topicPlan, anchorSummary, materials, subjectName)
-      // Replace the failed result
-      const idx = topicResults.findIndex(r => r.topicId === failed.topicId)
-      if (idx >= 0) topicResults[idx] = retryResult
+      await session.compactIfNeeded()
+      const topicPlan = remainingTopics[i]
+      const result = await generateTopicWithSession(state, session, topicPlan, i + 1, totalTopics)
+      topicResults.push(result)
+      state.snapshot.phaseProgress = { current: i + 2, total: totalTopics, label: `生成专题 ${i + 2}/${totalTopics}` }
+      sendProgress(state)
     }
+  } else {
+    // Concurrent generation with shared session (2 workers)
+    let nextIndex = 0
+
+    async function worker(): Promise<void> {
+      while (nextIndex < remainingTopics.length) {
+        const i = nextIndex++
+        if (state.cancelled) break
+        await session.compactIfNeeded()
+        const topicPlan = remainingTopics[i]
+        const result = await generateTopicWithSession(state, session, topicPlan, i + 1, totalTopics)
+        topicResults[i + 1] = result // +1 because index 0 is the Phase 2 anchor
+        state.snapshot.phaseProgress = { current: i + 2, total: totalTopics, label: `生成专题 ${i + 2}/${totalTopics}` }
+        sendProgress(state)
+      }
+    }
+
+    const workers = Array.from({ length: Math.min(concurrency, remainingTopics.length) }, () => worker())
+    await Promise.all(workers)
+  }
+
+  // Retry failed topics once (skip index 0 which is the Phase 2 anchor)
+  const failedIndices = topicResults
+    .map((r, i) => ({ r, i }))
+    .filter(({ r, i }) => i > 0 && r && !r.qualityPassed)
+
+  for (const { r: failed, i } of failedIndices) {
+    if (state.cancelled) break
+    debugLog(`Phase 3: retrying failed topic "${failed.topicTitle}"`)
+    const retryResult = await generateTopicWithSession(state, session, remainingTopics[i - 1], i, totalTopics)
+    topicResults[i] = retryResult
   }
 
   return topicResults
 }
 
-async function generateSingleTopic(
+async function generateTopicWithSession(
   state: OrchestrationState,
-  config: AIConfig,
-  plan: DocumentPlan,
+  session: GenerationSession,
   topicPlan: TopicPlan,
-  anchorSummary: string,
-  materials: { name: string; content: string }[],
-  subjectName?: string
+  index: number,
+  total: number
 ): Promise<TopicContent> {
   if (state.cancelled) {
     return { topicId: topicPlan.id, topicTitle: topicPlan.title, content: '', qualityPassed: false, qualityIssues: ['cancelled'] }
   }
 
-  // Filter materials for this topic
-  const relevantMats = materials.filter(m =>
-    topicPlan.materialRefs.some(ref => m.name.includes(ref))
-  )
-  const matContent = (relevantMats.length > 0 ? relevantMats : materials)
-    .map(m => `【${m.name}】\n${m.content.substring(0, 4000)}`)
-    .join('\n\n---\n\n')
-    .substring(0, 10000)
+  try {
+    const content = await session.generateTopic(topicPlan, index, total)
 
-  const prompt = `你是一位专业的复习文档撰写专家。请严格按照以下风格范本的结构和格式，撰写指定专题。
-
-【风格范本（第一个专题的结构参考）】
-${anchorSummary}
-
-【文档大纲】
-标题：${plan.title}
-概述：${plan.overview}
-
-【本次要撰写的专题】
-${JSON.stringify(topicPlan, null, 2)}
-
-学科：${subjectName || '未知'}
-
-【格式一致性要求 - 极其重要】
-1. 必须使用与风格范本完全相同的 ## 和 ### 标题层级结构
-2. 练习题板块的名称必须与风格范本完全一致（如"四、真题与模拟练习"）
-3. 每个专题必须包含：知识讲解、例题、练习题、答案解析、复习小结表格、答题技巧提示
-4. 练习题数量必须严格按 exerciseStrategy 执行，不多不少
-5. 每道题的答案和解析必须完整，不得戛然而止
-6. 如果资料中涉及具体历史事件、会议、年份，必须准确引用，不得遗漏关键节点
-7. 使用 Markdown 格式，第一个 ## 标题为专题标题
-
-【禁止事项】
-- 不要使用代码块包裹知识框架（会导致嵌套渲染问题）
-- 不要输出任何前言说明文字，直接从 # 标题开始
-- 答案解析必须有完整的论证逻辑和总结性结论
-
-相关资料：
-${matContent}
-
-请直接返回该专题的完整 Markdown 内容，以 # 标题开头。`
-
-  const maxRetries = 2
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      const content = await callAI(config, [{ role: 'user', content: prompt }], {
-        temperature: 0.5,
-        maxTokens: 16384,
-      })
-
-      if (!content || content.length < 200) {
-        if (attempt === maxRetries) {
-          return { topicId: topicPlan.id, topicTitle: topicPlan.title, content: '', qualityPassed: false, qualityIssues: ['生成内容过短'] }
-        }
-        await new Promise(r => setTimeout(r, 1000))
-        continue
-      }
-
-      const topicContent: TopicContent = {
+    if (!content || content.length < 200) {
+      streamBroker.publish(state.id, {
+        type: 'topic_complete',
         topicId: topicPlan.id,
         topicTitle: topicPlan.title,
-        content,
-        qualityPassed: true,
-        qualityIssues: [],
-      }
+        content: '',
+        qualityPassed: false,
+        qualityIssues: ['生成内容过短'],
+      })
+      return { topicId: topicPlan.id, topicTitle: topicPlan.title, content: '', qualityPassed: false, qualityIssues: ['生成内容过短'] }
+    }
 
-      // Quality check
-      const check = checkTopicContent(content, anchorSummary, topicPlan)
-      topicContent.qualityPassed = check.passed
-      topicContent.qualityIssues = check.issues
+    // Quality check
+    const check = checkTopicContent(content, '', topicPlan)
 
-      return topicContent
-    } catch (err) {
-      if (attempt === maxRetries) {
-        return {
-          topicId: topicPlan.id,
-          topicTitle: topicPlan.title,
-          content: '',
-          qualityPassed: false,
-          qualityIssues: [(err as Error).message],
-        }
-      }
-      await new Promise(r => setTimeout(r, 2000))
+    streamBroker.publish(state.id, {
+      type: 'topic_complete',
+      topicId: topicPlan.id,
+      topicTitle: topicPlan.title,
+      content,
+      qualityPassed: check.passed,
+      qualityIssues: check.issues,
+    })
+
+    return {
+      topicId: topicPlan.id,
+      topicTitle: topicPlan.title,
+      content,
+      qualityPassed: check.passed,
+      qualityIssues: check.issues,
+    }
+  } catch (err) {
+    const msg = (err as Error).message
+    debugLog(`Topic "${topicPlan.title}" error: ${msg}`)
+    streamBroker.publish(state.id, {
+      type: 'error',
+      topicId: topicPlan.id,
+      message: msg,
+    })
+    return {
+      topicId: topicPlan.id,
+      topicTitle: topicPlan.title,
+      content: '',
+      qualityPassed: false,
+      qualityIssues: [msg],
     }
   }
-
-  return { topicId: topicPlan.id, topicTitle: topicPlan.title, content: '', qualityPassed: false, qualityIssues: ['重试次数已用完'] }
 }
 
-function buildAnchorSummary(anchor: StyleAnchor, plan: DocumentPlan): string {
-  const lines: string[] = []
-  lines.push(`专题标题: ${plan.topics[0].title}`)
-  lines.push(`内容长度: 约 ${anchor.wordCount} 字`)
-  lines.push('')
-  lines.push('结构层级:')
-  for (const h of anchor.structuralElements) {
-    lines.push(`  - ${h}`)
-  }
-  lines.push('')
-  // Extract first 300 chars of each major section as formatting example
-  const sections = anchor.content.split(/\n(?=##\s)/).filter(Boolean)
-  lines.push('各节格式示例:')
-  for (const section of sections.slice(0, 4)) {
-    const heading = section.split('\n')[0]?.trim() || ''
-    const preview = section.substring(0, 300).replace(/\n/g, ' ').trim()
-    lines.push(`  ${heading}`)
-    lines.push(`  ${preview}...`)
-    lines.push('')
-  }
-  return lines.join('\n')
-}
-
-function checkTopicContent(content: string, anchorSummary: string, topicPlan: TopicPlan): { passed: boolean; issues: string[] } {
+function checkTopicContent(content: string, _anchorSummary: string, _topicPlan: TopicPlan): { passed: boolean; issues: string[] } {
   const issues: string[] = []
 
   if (content.length < 800) issues.push(`内容过短（${content.length} 字）`)
@@ -866,13 +824,6 @@ function checkTopicContent(content: string, anchorSummary: string, topicPlan: To
 
   const hasAnswer = /答案|解析|解题|参考答案/.test(content)
   if (!hasAnswer) issues.push('未检测到答案/解析')
-
-  // Check first heading is not identical to anchor's
-  const firstHeading = headings[0] || ''
-  const anchorTitleMatch = anchorSummary.match(/专题标题:\s*(.+)/)
-  if (anchorTitleMatch && firstHeading.includes(anchorTitleMatch[1])) {
-    issues.push('标题与风格锚点重复')
-  }
 
   return { passed: issues.length === 0, issues }
 }
@@ -952,7 +903,7 @@ ${truncated}`
 // Phase 5: Repair
 // ===================================================================
 async function phase5Repair(
-  state: OrchestrationState,
+  _state: OrchestrationState,
   config: AIConfig,
   fullDocument: string,
   issues: ReviewIssue[]
@@ -1031,6 +982,13 @@ export async function startOrchestration(
   activeOrchestrations.set(id, state)
   const phasesCompleted: PhaseId[] = []
   debugLog(`Orchestration ${id} started`)
+
+  // Subscribe to stream events and forward to renderer
+  const unsubStream = streamBroker.subscribe(id, (event: StreamEvent) => {
+    if (webContents && !webContents.isDestroyed()) {
+      webContents.send('orchestrator:stream-event', event)
+    }
+  })
 
   try {
     // Phase 0: Source Processing
@@ -1185,6 +1143,8 @@ export async function startOrchestration(
     sendProgress(state)
     throw err
   } finally {
+    unsubStream()
+    streamBroker.clear(id)
     activeOrchestrations.delete(id)
   }
 }

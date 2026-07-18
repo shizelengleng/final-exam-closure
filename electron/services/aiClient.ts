@@ -67,18 +67,15 @@ async function callClaudeCLIOnce(prompt: string, systemInstruction?: string): Pr
   const { spawn } = require('child_process')
 
   const instruction = systemInstruction || MARKDOWN_SYSTEM_INSTRUCTION
-  const wrappedPrompt = `${instruction}
 
-【用户请求】
-${prompt}`
-
-  console.log('[Claude CLI] prompt length:', wrappedPrompt.length)
-  aiDebugLog(`callClaudeCLIOnce: spawning claude, prompt=${wrappedPrompt.length} chars`)
+  console.log('[Claude CLI] prompt length:', prompt.length, 'system:', instruction.length)
+  aiDebugLog(`callClaudeCLIOnce: spawning claude, prompt=${prompt.length} chars, system=${instruction.length} chars`)
 
   return new Promise<string>((resolve, reject) => {
     const child = spawn('claude', [
       '-p', '-',
       '--output-format', 'json',
+      '--system-prompt', instruction,
       '--no-session-persistence',
       '--bare',
     ], {
@@ -104,7 +101,7 @@ ${prompt}`
     child.stdout.on('data', (data: Buffer) => { stdout += data.toString() })
     child.stderr.on('data', (data: Buffer) => { stderr += data.toString() })
 
-    child.stdin.write(wrappedPrompt)
+    child.stdin.write(prompt)
     child.stdin.end()
 
     child.on('close', (code: number | null) => {
@@ -142,20 +139,18 @@ async function callClaudeCLIContinue(previousOutput: string, systemInstruction?:
   const instruction = systemInstruction || MARKDOWN_SYSTEM_INSTRUCTION
   // 把之前输出的最后 3000 字作为上下文，让 AI 知道写到哪了
   const tail = previousOutput.slice(-3000)
-  const continuePrompt = `${instruction}
-
-【用户请求】
-以下是之前已经生成的内容（末尾部分），请从上次中断的地方接着写，不要重复已有内容。
+  const continuePrompt = `以下是之前已经生成的内容（末尾部分），请从上次中断的地方接着写，不要重复已有内容。
 只输出新增部分的 Markdown，不要包含任何说明文字。
 
 ---已生成内容末尾---
 ${tail}
 ---结束---`
 
-  return new Promise<string>((resolve, reject) => {
+  return new Promise<string>((resolve, _reject) => {
     const child = spawn('claude', [
       '-p', '-',
       '--output-format', 'json',
+      '--system-prompt', instruction,
       '--no-session-persistence',
       '--bare',
     ], {
@@ -923,4 +918,222 @@ ${materialContext}
   const content = await callAI(config, [{ role: 'user', content: prompt }], { temperature: 0.5, maxTokens: 16384 })
   if (!content) throw new Error('AI 返回内容为空')
   return content
+}
+
+// ===================================================================
+// Streaming support
+// ===================================================================
+
+async function* streamClaudeCLI(
+  prompt: string,
+  systemInstruction?: string
+): AsyncGenerator<string> {
+  const { spawn } = require('child_process')
+
+  const instruction = systemInstruction || MARKDOWN_SYSTEM_INSTRUCTION
+
+  aiDebugLog(`streamClaudeCLI: spawning claude, prompt=${prompt.length} chars, system=${instruction.length} chars`)
+
+  const child = spawn('claude', [
+    '-p', '-',
+    '--output-format', 'stream-json',
+    '--verbose',
+    '--system-prompt', instruction,
+    '--no-session-persistence',
+    '--bare',
+  ], {
+    stdio: ['pipe', 'pipe', 'pipe'],
+  })
+
+  let settled = false
+  let lastChunkTime = Date.now()
+
+  // Hard timeout
+  const timer = setTimeout(() => {
+    if (!settled) {
+      settled = true
+      child.kill('SIGTERM')
+      aiDebugLog('streamClaudeCLI: TIMEOUT after 300s')
+    }
+  }, 300000)
+
+  // Stall detection — if no data for 120s, kill
+  const stallCheck = setInterval(() => {
+    if (!settled && Date.now() - lastChunkTime > 120000) {
+      settled = true
+      child.kill('SIGTERM')
+      clearInterval(stallCheck)
+      clearTimeout(timer)
+      aiDebugLog('streamClaudeCLI: STALL detected (120s no data)')
+    }
+  }, 30000)
+
+  child.stdin.write(prompt)
+  child.stdin.end()
+
+  // Drain stderr to prevent buffer overflow
+  let stderrOutput = ''
+  child.stderr.on('data', (data: Buffer) => { stderrOutput += data.toString() })
+
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let yieldedText = false
+
+  try {
+    const stream = child.stdout as unknown as NodeJS.ReadableStream
+    for await (const chunk of stream) {
+      if (settled) break
+      lastChunkTime = Date.now()
+      buffer += decoder.decode(chunk as Buffer, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+
+      for (const line of lines) {
+        const trimmed = line.trim()
+        if (!trimmed) continue
+
+        try {
+          const event = JSON.parse(trimmed)
+
+          // stream-json + verbose format: assistant messages with content blocks
+          if (event.type === 'assistant' && event.message?.content) {
+            for (const block of event.message.content) {
+              if (block.type === 'text' && block.text) {
+                yield block.text
+                yieldedText = true
+              }
+            }
+          }
+          // Also handle classic content_block_delta format (if ever emitted)
+          else if (event.type === 'content_block_delta' && event.delta?.text) {
+            yield event.delta.text
+            yieldedText = true
+          }
+          // Stop on result
+          else if (event.type === 'result') {
+            aiDebugLog('streamClaudeCLI: result received')
+            return
+          }
+        } catch {
+          // skip non-JSON lines
+        }
+      }
+    }
+
+    // Process remaining buffer
+    if (buffer.trim()) {
+      try {
+        const event = JSON.parse(buffer.trim())
+        if (event.type === 'assistant' && event.message?.content) {
+          for (const block of event.message.content) {
+            if (block.type === 'text' && block.text) {
+              yield block.text
+              yieldedText = true
+            }
+          }
+        }
+        else if (event.type === 'content_block_delta' && event.delta?.text) {
+          yield event.delta.text
+          yieldedText = true
+        }
+      } catch { /* ignore */ }
+    }
+  } finally {
+    clearInterval(stallCheck)
+    if (!settled) {
+      settled = true
+      clearTimeout(timer)
+      child.kill('SIGTERM')
+    }
+  }
+
+  if (!yieldedText) {
+    aiDebugLog('streamClaudeCLI: WARNING - no text content yielded')
+  }
+}
+
+export interface StreamOptions {
+  temperature?: number
+  maxTokens?: number
+  systemInstruction?: string
+  model?: string
+}
+
+export async function* streamAI(
+  config: AIConfig,
+  messages: ChatMessage[],
+  options: StreamOptions = {}
+): AsyncGenerator<string> {
+  aiDebugLog(`streamAI: provider=${config.provider}, messages=${messages.length}`)
+
+  if (config.provider === 'claude-code') {
+    const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user')
+    if (!lastUserMsg) throw new Error('No user message')
+    const userText = typeof lastUserMsg.content === 'string'
+      ? lastUserMsg.content
+      : lastUserMsg.content.filter(p => p.type === 'text').map(p => p.text).join('')
+
+    let sysInstruction = options.systemInstruction
+    if (!sysInstruction) {
+      const promptLower = userText.toLowerCase()
+      if (promptLower.includes('markdown') || promptLower.includes('文档') || promptLower.includes('修改') || promptLower.includes('生成')) {
+        sysInstruction = MARKDOWN_SYSTEM_INSTRUCTION
+      } else {
+        sysInstruction = JSON_SYSTEM_INSTRUCTION
+      }
+    }
+    yield* streamClaudeCLI(userText, sysInstruction)
+    return
+  }
+
+  const providerConfig = PROVIDER_CONFIG[config.provider as Exclude<AIProvider, 'claude-code'>]
+  if (!providerConfig) throw new Error(`未知的 AI 提供商: ${config.provider}`)
+  const baseUrl = config.baseUrl || providerConfig.baseUrl
+
+  // For streaming, inject model into a copy of messages isn't needed — model goes in body
+  // But we need to pass it separately. We'll modify the fetch body construction.
+  const response = await fetch(`${baseUrl}/v1/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${config.apiKey}`,
+    },
+    body: JSON.stringify({
+      model: options.model || providerConfig.model,
+      messages,
+      temperature: options.temperature ?? 0.5,
+      max_tokens: options.maxTokens ?? 16384,
+      stream: true,
+    }),
+  })
+
+  if (!response.ok) {
+    const error = await response.text()
+    throw new Error(`AI streaming failed: ${response.status} - ${error}`)
+  }
+
+  const body = response.body as unknown as NodeJS.ReadableStream
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  for await (const chunk of body) {
+    buffer += decoder.decode(chunk as Buffer, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() || ''
+
+    for (const line of lines) {
+      const trimmed = line.trim()
+      if (!trimmed || !trimmed.startsWith('data: ')) continue
+      const data = trimmed.slice(6)
+      if (data === '[DONE]') return
+
+      try {
+        const parsed = JSON.parse(data)
+        const delta = parsed.choices?.[0]?.delta?.content
+        if (delta) yield delta
+      } catch {
+        // skip malformed SSE lines
+      }
+    }
+  }
 }

@@ -1,9 +1,10 @@
-import { useState, useEffect } from 'react'
-import { Upload, Card, Button, Empty, Tag, message, Input, Popover, Modal } from 'antd'
+import { useState, useEffect, useRef, useCallback } from 'react'
+import { Upload, Card, Button, Empty, Tag, message, Input, Popover, Modal, Dropdown } from 'antd'
 import {
   InboxOutlined, FilePdfOutlined, FileWordOutlined, FileImageOutlined,
   DeleteOutlined, FileTextOutlined, FolderOutlined, PlusOutlined, CloseOutlined,
   EyeOutlined, StarOutlined, StarFilled, ThunderboltOutlined, SwapOutlined,
+  ScanOutlined, LoadingOutlined, CheckCircleOutlined, UploadOutlined,
 } from '@ant-design/icons'
 import { createWorker } from 'tesseract.js'
 import FileViewer from '../Common/FileViewer'
@@ -50,6 +51,79 @@ const MaterialList = ({ subjectId }: MaterialListProps) => {
   const [viewingMaterial, setViewingMaterial] = useState<MaterialItem | null>(null)
   const [allSubjects, setAllSubjects] = useState<Subject[]>([])
   const isUncategorized = subjectId === UNCATEGORIZED_ID
+
+  // PDF OCR queue
+  const [ocrState, setOcrState] = useState<Record<string, 'idle' | 'processing' | 'done' | 'error'>>({})
+  const [ocrProgress, setOcrProgress] = useState<{ current: string; remaining: number } | null>(null)
+  const ocrQueueRef = useRef<string[]>([])
+  const ocrProcessingRef = useRef(false)
+  const ocrEngineRef = useRef<Record<string, 'tesseract' | 'baidu'>>({})
+
+  const processOcrQueue = useCallback(async () => {
+    if (ocrProcessingRef.current) return
+    ocrProcessingRef.current = true
+
+    while (ocrQueueRef.current.length > 0) {
+      const materialId = ocrQueueRef.current.shift()!
+      console.log('[OCR Queue] Processing:', materialId)
+      // Read from db to avoid stale closure
+      const material = await window.electron?.db.get('materials', materialId) as MaterialItem | null
+      console.log('[OCR Queue] Material from DB:', material ? { id: material.id, name: material.name, filePath: material.filePath, type: material.type } : 'null')
+      if (!material || !material.filePath) {
+        console.warn('[OCR Queue] Skipping — no material or no filePath')
+        setOcrState(prev => ({ ...prev, [materialId]: 'error' }))
+        continue
+      }
+
+      setOcrState(prev => ({ ...prev, [materialId]: 'processing' }))
+      setOcrProgress({ current: material.name, remaining: ocrQueueRef.current.length })
+      try {
+        const engine = ocrEngineRef.current[materialId] || 'tesseract'
+        const result = await window.electron?.file.ocrPdf(material.filePath, engine)
+        console.log('[OCR Queue] Result length:', result?.length || 0)
+        if (result) {
+          await window.electron?.db.update('materials', materialId, { content: result })
+          setMaterials(prev => prev.map(m => m.id === materialId ? { ...m, content: result } : m))
+          setOcrState(prev => ({ ...prev, [materialId]: 'done' }))
+          // Trigger Wiki build for OCR'd content
+          const dir = await window.electron?.wiki.getDir(material.subjectId)
+          if (dir) {
+            window.electron?.wiki.buildSource(material.subjectId, material.name, result)
+              .then(() => window.electron?.wiki.buildWiki(material.subjectId))
+              .catch(() => {})
+          }
+        } else {
+          console.warn('[OCR Queue] OCR returned empty/null')
+          setOcrState(prev => ({ ...prev, [materialId]: 'error' }))
+        }
+      } catch (err) {
+        console.error('[OCR Queue] Error:', err)
+        setOcrState(prev => ({ ...prev, [materialId]: 'error' }))
+      }
+    }
+
+    setOcrProgress(null)
+    ocrProcessingRef.current = false
+  }, [])
+
+  const handleOcrPdf = useCallback((materialId: string, engine?: 'tesseract' | 'baidu') => {
+    if (ocrQueueRef.current.includes(materialId)) return
+    // Store engine choice for this material
+    ocrEngineRef.current[materialId] = engine || 'tesseract'
+    ocrQueueRef.current.push(materialId)
+    setOcrState(prev => ({ ...prev, [materialId]: 'idle' }))
+    processOcrQueue()
+  }, [processOcrQueue])
+
+  const handleRevertOcr = useCallback(async (materialId: string) => {
+    const material = await window.electron?.db.get('materials', materialId) as MaterialItem | null
+    if (!material) return
+    const placeholder = `[PDF] ${material.name}`
+    await window.electron?.db.update('materials', materialId, { content: placeholder })
+    setMaterials(prev => prev.map(m => m.id === materialId ? { ...m, content: placeholder } : m))
+    setOcrState(prev => ({ ...prev, [materialId]: 'idle' }))
+    message.success(`已退回「${material.name}」的 OCR 结果，可重新识别`)
+  }, [])
 
   useEffect(() => {
     loadData()
@@ -118,13 +192,7 @@ const MaterialList = ({ subjectId }: MaterialListProps) => {
       })
     }
     if (ext === 'pdf') {
-      try {
-        const arrayBuffer = await file.arrayBuffer()
-        const result = await window.electron?.ipcRenderer.invoke('file:readPdf', Array.from(new Uint8Array(arrayBuffer)))
-        return (result as string) || `[PDF] ${file.name}`
-      } catch {
-        return `[PDF] ${file.name}`
-      }
+      return `[PDF] ${file.name}`
     }
     if (ext === 'docx' || ext === 'doc') {
       try {
@@ -194,14 +262,16 @@ const MaterialList = ({ subjectId }: MaterialListProps) => {
     const tagName = tags.find((t) => t.id === assignedTag)?.name || '未分类'
     message.success(`已上传: ${file.name} (标签: ${tagName})`)
 
-    // 触发 Wiki 构建（后台静默执行）
-    window.electron?.wiki.getDir(subjectId).then(dir => {
-      if (dir && content) {
-        window.electron?.wiki.buildSource(subjectId, file.name, content)
-          .then(() => window.electron?.wiki.buildWiki(subjectId))
-          .catch(() => {})
-      }
-    })
+    // 触发 Wiki 构建（后台静默执行，跳过 PDF 占位内容）
+    if (ext !== 'pdf') {
+      window.electron?.wiki.getDir(subjectId).then(dir => {
+        if (dir && content) {
+          window.electron?.wiki.buildSource(subjectId, file.name, content)
+            .then(() => window.electron?.wiki.buildWiki(subjectId))
+            .catch(() => {})
+        }
+      })
+    }
     return false
   }
 
@@ -287,6 +357,96 @@ const MaterialList = ({ subjectId }: MaterialListProps) => {
     if (!a.favorite && b.favorite) return 1
     return 0
   })
+
+  // Check if a PDF needs OCR (content is placeholder)
+  const needsOcr = (item: MaterialItem) =>
+    item.type === 'pdf' && (!item.content || item.content.startsWith('[PDF]'))
+
+  // Re-upload file for materials missing filePath
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [reuploadTarget, setReuploadTarget] = useState<string | null>(null)
+
+  const handleReupload = useCallback(async (materialId: string, file: File) => {
+    try {
+      const arrayBuffer = await file.arrayBuffer()
+      const saveResult = await window.electron?.file.saveUpload(file.name, Array.from(new Uint8Array(arrayBuffer)))
+      if (saveResult?.path) {
+        await window.electron?.db.update('materials', materialId, { filePath: saveResult.path })
+        setMaterials(prev => prev.map(m => m.id === materialId ? { ...m, filePath: saveResult.path } : m))
+        message.success('文件已重新上传')
+        // Auto-trigger OCR
+        handleOcrPdf(materialId)
+      }
+    } catch {
+      message.error('重新上传失败')
+    }
+    setReuploadTarget(null)
+  }, [handleOcrPdf])
+
+  const ocrMenuItems = (materialId: string) => [
+    { key: 'tesseract', label: '本地识别 (Tesseract)', onClick: () => handleOcrPdf(materialId, 'tesseract') },
+    { key: 'baidu', label: '云端识别 (百度 OCR)', onClick: () => handleOcrPdf(materialId, 'baidu') },
+  ]
+
+  const renderOcrButton = (item: MaterialItem) => {
+    if (!needsOcr(item)) return null
+    const state = ocrState[item.id] || 'idle'
+    const hasFile = !!item.filePath
+
+    if (state === 'done') {
+      return <Button type="text" size="small" icon={<CheckCircleOutlined className="text-green-500" />} disabled />
+    }
+    if (state === 'processing') {
+      return <Button type="text" size="small" icon={<LoadingOutlined className="text-blue-500" />} disabled />
+    }
+    if (!hasFile) {
+      return (
+        <>
+          <Button
+            type="text"
+            size="small"
+            icon={<UploadOutlined className="text-gray-400" />}
+            onClick={() => { setReuploadTarget(item.id); fileInputRef.current?.click() }}
+            title="文件缺失，点击重新上传"
+          />
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".pdf"
+            style={{ display: 'none' }}
+            onChange={(e) => {
+              const file = e.target.files?.[0]
+              if (file && reuploadTarget) handleReupload(reuploadTarget, file)
+              e.target.value = ''
+            }}
+          />
+        </>
+      )
+    }
+    if (state === 'error') {
+      return (
+        <Dropdown menu={{ items: ocrMenuItems(item.id) }} trigger={['click']}>
+          <Button
+            type="text"
+            size="small"
+            danger
+            icon={<ScanOutlined />}
+            title="OCR 失败，点击选择引擎重试"
+          />
+        </Dropdown>
+      )
+    }
+    return (
+      <Dropdown menu={{ items: ocrMenuItems(item.id) }} trigger={['click']}>
+        <Button
+          type="text"
+          size="small"
+          icon={<ScanOutlined className="text-orange-500" />}
+          title="选择 OCR 引擎进行识别"
+        />
+      </Dropdown>
+    )
+  }
 
   // Uncategorized mode: simple layout with local classify to subjects
   if (isUncategorized) {
@@ -388,11 +548,17 @@ const MaterialList = ({ subjectId }: MaterialListProps) => {
                       </p>
                       <p className="text-xs text-gray-400">
                         {item.size} · {item.addedAt}
-                        {item.content && <span className="ml-2 text-green-500">已读取</span>}
+                        {item.content && !item.content.startsWith('[PDF]') && <span className="ml-2 text-green-500">已读取</span>}
+                        {needsOcr(item) && (
+                          <span className="ml-2 text-orange-500">
+                            {!item.filePath ? '文件缺失' : ocrState[item.id] === 'processing' ? '识别中...' : ocrState[item.id] === 'done' ? '已识别' : ocrState[item.id] === 'error' ? '识别失败' : '待识别'}
+                          </span>
+                        )}
                       </p>
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
+                    {renderOcrButton(item)}
                     <Tag color="blue">{item.type}</Tag>
                     <Button type="text" danger icon={<DeleteOutlined />} onClick={() => handleDelete(item.id)} />
                   </div>
@@ -404,7 +570,21 @@ const MaterialList = ({ subjectId }: MaterialListProps) => {
           <Empty description="还没有资料，上传一份开始吧" className="mt-12" />
         )}
 
-        <FileViewer material={viewingMaterial} open={!!viewingMaterial} onClose={() => setViewingMaterial(null)} />
+        <FileViewer material={viewingMaterial} open={!!viewingMaterial} onClose={() => setViewingMaterial(null)} onRevertOcr={handleRevertOcr} />
+
+        {/* OCR 浮窗进度 */}
+        {ocrProgress && (
+          <div className="fixed bottom-6 left-6 z-50 bg-white rounded-xl shadow-lg border border-gray-200 px-4 py-3 flex items-center gap-3 max-w-sm">
+            <LoadingOutlined className="text-blue-500 text-lg" />
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-gray-800 truncate">正在 OCR 识别</p>
+              <p className="text-xs text-gray-500 truncate">{ocrProgress.current}</p>
+              {ocrProgress.remaining > 0 && (
+                <p className="text-xs text-gray-400">队列中还有 {ocrProgress.remaining} 个文件</p>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     )
   }
@@ -504,14 +684,42 @@ const MaterialList = ({ subjectId }: MaterialListProps) => {
         </div>
 
         {materials.length > 0 && (
-          <Button
-            icon={<SwapOutlined />}
-            onClick={handleReclassify}
-            disabled={allSubjects.length <= 1}
-            size="small"
-          >
-            重新分类
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              icon={<SwapOutlined />}
+              onClick={handleReclassify}
+              disabled={allSubjects.length <= 1}
+              size="small"
+            >
+              重新分类
+            </Button>
+            {materials.some(m => needsOcr(m)) && (
+              <Dropdown menu={{ items: [
+                { key: 'tesseract', label: '全部本地识别 (Tesseract)', onClick: () => {
+                  const pdfIds = materials.filter(m => needsOcr(m) && !ocrQueueRef.current.includes(m.id) && ocrState[m.id] !== 'processing' && ocrState[m.id] !== 'done').map(m => m.id)
+                  pdfIds.forEach(id => { ocrEngineRef.current[id] = 'tesseract' })
+                  ocrQueueRef.current.push(...pdfIds)
+                  setOcrState(prev => { const next = { ...prev }; pdfIds.forEach(id => { next[id] = 'idle' }); return next })
+                  processOcrQueue()
+                }},
+                { key: 'baidu', label: '全部云端识别 (百度 OCR)', onClick: () => {
+                  const pdfIds = materials.filter(m => needsOcr(m) && !ocrQueueRef.current.includes(m.id) && ocrState[m.id] !== 'processing' && ocrState[m.id] !== 'done').map(m => m.id)
+                  pdfIds.forEach(id => { ocrEngineRef.current[id] = 'baidu' })
+                  ocrQueueRef.current.push(...pdfIds)
+                  setOcrState(prev => { const next = { ...prev }; pdfIds.forEach(id => { next[id] = 'idle' }); return next })
+                  processOcrQueue()
+                }},
+              ] }} trigger={['click']}>
+                <Button
+                  icon={<ScanOutlined />}
+                  size="small"
+                  type="default"
+                >
+                  一键 OCR 所有 PDF
+                </Button>
+              </Dropdown>
+            )}
+          </div>
         )}
 
         <Dragger
@@ -560,7 +768,12 @@ const MaterialList = ({ subjectId }: MaterialListProps) => {
                       </p>
                       <p className="text-xs text-gray-400">
                         {item.size} · {item.addedAt}
-                        {item.content && <span className="ml-2 text-green-500">已读取</span>}
+                        {item.content && !item.content.startsWith('[PDF]') && <span className="ml-2 text-green-500">已读取</span>}
+                        {needsOcr(item) && (
+                          <span className="ml-2 text-orange-500">
+                            {!item.filePath ? '文件缺失' : ocrState[item.id] === 'processing' ? '识别中...' : ocrState[item.id] === 'done' ? '已识别' : ocrState[item.id] === 'error' ? '识别失败' : '待识别'}
+                          </span>
+                        )}
                       </p>
                     </div>
                   </div>
@@ -600,6 +813,7 @@ const MaterialList = ({ subjectId }: MaterialListProps) => {
                         {getTagName(item.tag || 'default')}
                       </Tag>
                     </Popover>
+                    {renderOcrButton(item)}
                     <Tag color="blue">{item.type}</Tag>
                     <Button type="text" danger icon={<DeleteOutlined />} onClick={() => handleDelete(item.id)} />
                   </div>
@@ -642,7 +856,21 @@ const MaterialList = ({ subjectId }: MaterialListProps) => {
         </div>
       </Modal>
 
-      <FileViewer material={viewingMaterial} open={!!viewingMaterial} onClose={() => setViewingMaterial(null)} />
+      <FileViewer material={viewingMaterial} open={!!viewingMaterial} onClose={() => setViewingMaterial(null)} onRevertOcr={handleRevertOcr} />
+
+      {/* OCR 浮窗进度 */}
+      {ocrProgress && (
+        <div className="fixed bottom-6 left-6 z-50 bg-white rounded-xl shadow-lg border border-gray-200 px-4 py-3 flex items-center gap-3 max-w-sm">
+          <LoadingOutlined className="text-blue-500 text-lg" />
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-gray-800 truncate">正在 OCR 识别</p>
+            <p className="text-xs text-gray-500 truncate">{ocrProgress.current}</p>
+            {ocrProgress.remaining > 0 && (
+              <p className="text-xs text-gray-400">队列中还有 {ocrProgress.remaining} 个文件</p>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

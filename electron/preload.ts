@@ -45,6 +45,12 @@ contextBridge.exposeInMainWorld('electron', {
     removeProgressListener: () => {
       ipcRenderer.removeAllListeners('orchestrator:progress')
     },
+    onStreamEvent: (callback: (event: unknown) => void) => {
+      ipcRenderer.on('orchestrator:stream-event', (_event, streamEvent) => callback(streamEvent))
+    },
+    removeStreamListener: () => {
+      ipcRenderer.removeAllListeners('orchestrator:stream-event')
+    },
   },
   search: {
     query: (keyword: string, sourceIds?: string[]) =>
@@ -70,6 +76,7 @@ contextBridge.exposeInMainWorld('electron', {
   },
   file: {
     readPdf: (buffer: number[]) => ipcRenderer.invoke('file:readPdf', buffer),
+    ocrPdf: (filePath: string, engine?: 'tesseract' | 'baidu') => ipcRenderer.invoke('file:ocrPdf', filePath, engine),
     readDocx: (buffer: number[]) => ipcRenderer.invoke('file:readDocx', buffer),
     saveFile: (content: string, defaultName: string) => ipcRenderer.invoke('file:saveFile', content, defaultName),
     getAsFile: (filePath: string) => ipcRenderer.invoke('file:getAsFile', filePath),
@@ -93,6 +100,10 @@ contextBridge.exposeInMainWorld('electron', {
     lint: (subjectId: string) => ipcRenderer.invoke('wiki:lint', subjectId),
     saveQueryResult: (subjectId: string, title: string, content: string, sources?: string[]) => ipcRenderer.invoke('wiki:saveQueryResult', subjectId, title, content, sources),
     deletePage: (subjectId: string, pageName: string, pageType: string) => ipcRenderer.invoke('wiki:deletePage', subjectId, pageName, pageType),
+    prepareBuildSession: (subjectId: string, materials: { name: string; content: string }[]) =>
+      ipcRenderer.invoke('wiki:prepareBuildSession', subjectId, materials),
+    cleanupBuildSession: (subjectId: string) =>
+      ipcRenderer.invoke('wiki:cleanupBuildSession', subjectId),
   },
   terminal: {
     create: (options?: { cli?: string }) => ipcRenderer.send('terminal:create', options),
@@ -138,5 +149,44 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke('context:readHistory', subjectId, historyType, limit),
     clearHistory: (subjectId: string, historyType: string) =>
       ipcRenderer.invoke('context:clearHistory', subjectId, historyType),
+  },
+  claude: {
+    getSession: (subjectId: string, sessionKey?: string) => ipcRenderer.invoke('claude:getSession', { subjectId, sessionKey }),
+    sendMessage: (subjectId: string, message: string, sessionKey?: string, timeout?: number) => ipcRenderer.invoke('claude:sendMessage', { subjectId, message, sessionKey, timeout }),
+    clearSession: (subjectId: string, sessionKey?: string) => ipcRenderer.invoke('claude:clearSession', { subjectId, sessionKey }),
+    stopMessage: (subjectId: string, sessionKey?: string) => ipcRenderer.invoke('claude:stopMessage', { subjectId, sessionKey }),
+    listSessions: () => ipcRenderer.invoke('claude:listSessions'),
+    onDelta: (callback: (data: { subjectId: string; delta: string }) => void) => {
+      ipcRenderer.on('claude:stream-delta', (_event, data) => callback(data))
+    },
+    onComplete: (callback: (data: { subjectId: string; fullText: string; sessionId: string | null }) => void) => {
+      ipcRenderer.on('claude:stream-complete', (_event, data) => callback(data))
+    },
+    onError: (callback: (data: { subjectId: string; error: string }) => void) => {
+      ipcRenderer.on('claude:stream-error', (_event, data) => callback(data))
+    },
+    onToolUse: (callback: (data: { subjectId: string; toolName: string; toolInput: Record<string, unknown> }) => void) => {
+      ipcRenderer.on('claude:stream-tool', (_event, data) => callback(data))
+    },
+    removeListeners: () => {
+      ipcRenderer.removeAllListeners('claude:stream-delta')
+      ipcRenderer.removeAllListeners('claude:stream-complete')
+      ipcRenderer.removeAllListeners('claude:stream-error')
+      ipcRenderer.removeAllListeners('claude:stream-tool')
+    },
+  },
+  skill: {
+    list: () => ipcRenderer.invoke('skill:list'),
+    toggle: (id: string, enabled: boolean) => ipcRenderer.invoke('skill:toggle', { id, enabled }),
+    add: (sourcePath: string) => ipcRenderer.invoke('skill:add', sourcePath),
+    remove: (id: string) => ipcRenderer.invoke('skill:remove', id),
+  },
+  dialog: {
+    selectDirectory: () => ipcRenderer.invoke('dialog:selectDirectory'),
+  },
+  ocr: {
+    getConfig: () => ipcRenderer.invoke('ocr:getConfig'),
+    saveConfig: (config: { apiKey: string; secretKey: string }) => ipcRenderer.invoke('ocr:saveConfig', config),
+    isConfigured: () => ipcRenderer.invoke('ocr:isConfigured'),
   },
 })

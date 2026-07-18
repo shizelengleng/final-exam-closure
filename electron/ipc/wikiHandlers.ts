@@ -2,6 +2,7 @@ import { ipcMain, dialog, BrowserWindow } from 'electron'
 import { listPages, readPage, readAllPages, getSynthesis, getWikiDir } from '../services/wikiReader'
 import { buildSourcePage, buildConceptsAndSynthesis, initWikiDir, lintWiki, saveQueryResult, deleteWikiPage } from '../services/wikiBuilder'
 import { readCollection, writeCollection } from '../db/store'
+import { prepareWikiWorkspace, cleanupWikiWorkspace } from '../services/claudeSessionManager'
 import type { AIConfig } from '../services/aiClient'
 
 interface AIConfigRecord {
@@ -113,5 +114,14 @@ export function registerWikiHandlers() {
     const wikiDir = await getWikiDir(subjectId)
     if (!wikiDir) return { success: false, error: 'Wiki 目录未配置' }
     return deleteWikiPage(subjectId, wikiDir, pageName, pageType)
+  })
+
+  // Claude 对话式 Wiki 构建
+  ipcMain.handle('wiki:prepareBuildSession', async (_event, subjectId: string, materials: { name: string; content: string }[]) => {
+    return prepareWikiWorkspace(subjectId, materials)
+  })
+
+  ipcMain.handle('wiki:cleanupBuildSession', async (_event, subjectId: string) => {
+    return cleanupWikiWorkspace(subjectId)
   })
 }

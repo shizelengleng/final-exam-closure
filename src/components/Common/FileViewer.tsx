@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { Modal, Empty, Button, Segmented, Spin } from 'antd'
-import { FilePdfOutlined, FileWordOutlined, FileTextOutlined, FileImageOutlined, FileExcelOutlined, FilePptOutlined, ZoomInOutlined, ZoomOutOutlined, ReloadOutlined } from '@ant-design/icons'
+import { FilePdfOutlined, FileWordOutlined, FileTextOutlined, FileImageOutlined, FileExcelOutlined, FilePptOutlined, ZoomInOutlined, ZoomOutOutlined, ReloadOutlined, UndoOutlined } from '@ant-design/icons'
 import { marked } from 'marked'
 import DocViewer, { DocViewerRenderers } from '@cyntler/react-doc-viewer'
 import PdfViewer from './PdfViewer'
@@ -19,6 +19,7 @@ interface FileViewerProps {
   material: Material | null
   open: boolean
   onClose: () => void
+  onRevertOcr?: (materialId: string) => void
 }
 
 const getFileExtension = (name: string): string => {
@@ -38,7 +39,7 @@ const getFileType = (material: Material): string => {
   return material.type || 'text'
 }
 
-const FileViewer = ({ material, open, onClose }: FileViewerProps) => {
+const FileViewer = ({ material, open, onClose, onRevertOcr }: FileViewerProps) => {
   const [viewMode, setViewMode] = useState<'formatted' | 'raw'>('formatted')
   const [pdfFile, setPdfFile] = useState<File | null>(null)
   const [docxHtml, setDocxHtml] = useState('')
@@ -380,15 +381,29 @@ const FileViewer = ({ material, open, onClose }: FileViewerProps) => {
       footer={
         <div className="flex justify-between items-center">
           {fileType !== 'image' && fileType !== 'xlsx' && (
-            <Segmented
-              size="small"
-              value={viewMode}
-              onChange={(v) => setViewMode(v as 'formatted' | 'raw')}
-              options={[
-                { label: '格式化', value: 'formatted' },
-                { label: '纯文本', value: 'raw' },
-              ]}
-            />
+            <div className="flex items-center gap-2">
+              <Segmented
+                size="small"
+                value={viewMode}
+                onChange={(v) => setViewMode(v as 'formatted' | 'raw')}
+                options={[
+                  { label: '格式化', value: 'formatted' },
+                  { label: '纯文本', value: 'raw' },
+                ]}
+              />
+              {fileType === 'pdf' && material.content?.includes('[PDF') && material.content?.includes('OCR 识别结果') && onRevertOcr && (
+                <Button
+                  size="small"
+                  icon={<UndoOutlined />}
+                  onClick={() => {
+                    onRevertOcr(material.id)
+                    onClose()
+                  }}
+                >
+                  退回OCR
+                </Button>
+              )}
+            </div>
           )}
           {(fileType === 'image' || fileType === 'xlsx') && <div />}
           <div className="flex gap-2">

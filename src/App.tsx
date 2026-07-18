@@ -5,19 +5,17 @@ import TerminalPanel from './components/Common/Terminal'
 import TabBar from './components/Common/TabBar'
 import SubjectOverview from './components/Overview/SubjectOverview'
 import MaterialList from './components/Materials/MaterialList'
-import QuizSession from './components/Quiz/QuizSession'
 import WrongBook from './components/Review/WrongBook'
 import KnowledgeGraph from './components/KnowledgeGraph/KnowledgeGraph'
-import ChatPanel from './components/Chat/ChatPanel'
+import ClaudeChat from './components/Skills/ClaudeChat'
 
 import WeakAnalysis from './components/Analysis/WeakAnalysis'
 import SearchPanel from './components/Search/SearchPanel'
-import ContentGenerator from './components/Content/ContentGenerator'
 import WikiBrowser from './components/Wiki/WikiBrowser'
 import { useTheme } from './contexts/ThemeContext'
 import { injectBuiltinKeywords } from './lib/classifier'
 
-type SubjectTab = 'search' | 'materials' | 'quiz' | 'content' | 'graph' | 'review' | 'analysis' | 'wiki'
+type SubjectTab = 'search' | 'materials' | 'content' | 'graph' | 'review' | 'analysis' | 'wiki'
 
 const DEFAULT_SUBJECTS: Subject[] = [
   { id: 'math', name: '数学', color: '#1677ff', keywords: ['数学', '微积分', '线性代数', '概率', '统计', '极限', '导数', '积分', '矩阵', '方程', '函数', '几何', '代数', '三角'] },
@@ -155,10 +153,8 @@ const App = () => {
         return <SearchPanel subjectId={currentSubjectId} key={refreshKey} />
       case 'materials':
         return <MaterialList subjectId={currentSubjectId} key={refreshKey} />
-      case 'quiz':
-        return <QuizSession subjectId={currentSubjectId} key={refreshKey} />
       case 'content':
-        return <ContentGenerator subjectId={currentSubjectId} subjectName={currentSubject?.name} key={refreshKey} />
+        return <ClaudeChat subjectId={currentSubjectId} subjectName={currentSubject?.name} key={refreshKey} />
       case 'review':
         return <WrongBook subjectId={currentSubjectId} key={refreshKey} />
       case 'graph':

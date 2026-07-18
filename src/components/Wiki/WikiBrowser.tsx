@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
-import { Empty, Spin, Tag, Button, message, Collapse, Modal, Checkbox } from 'antd'
-import { BookOutlined, BulbOutlined, ApartmentOutlined, ReloadOutlined, CloudDownloadOutlined, FilePdfOutlined, FileWordOutlined, DeleteOutlined } from '@ant-design/icons'
+import { Empty, Spin, Tag, Button, message, Collapse, Modal, Checkbox, Input } from 'antd'
+import { BookOutlined, BulbOutlined, ApartmentOutlined, ReloadOutlined, CloudDownloadOutlined, FilePdfOutlined, FileWordOutlined, DeleteOutlined, ArrowLeftOutlined } from '@ant-design/icons'
 import { marked } from 'marked'
+import WikiBuildChat from './WikiBuildChat'
 
 interface WikiBrowserProps {
   subjectId: string
@@ -29,13 +30,14 @@ const WikiBrowser = ({ subjectId }: WikiBrowserProps) => {
   const [loading, setLoading] = useState(false)
   const [contentLoading, setContentLoading] = useState(false)
   const [wikiDir, setWikiDir] = useState<string | null>(null)
-  const [building, setBuilding] = useState(false)
-  const [buildProgress, setBuildProgress] = useState('')
+  const [mode, setMode] = useState<'browse' | 'build'>('browse')
+  const [buildMaterials, setBuildMaterials] = useState<{ id: string; name: string }[]>([])
   const [collapsedGroups, setCollapsedGroups] = useState<string[]>([])
 
-  const [materialSelectOpen, setMaterialSelectOpen] = useState(false)
+  const [buildModalOpen, setBuildModalOpen] = useState(false)
   const [availableMaterials, setAvailableMaterials] = useState<MaterialItem[]>([])
   const [selectedMaterialIds, setSelectedMaterialIds] = useState<string[]>([])
+  const [customInstruction, setCustomInstruction] = useState('')
 
   const allGroupKeys: PageType[] = ['synthesis', 'concept', 'source']
 
@@ -127,38 +129,31 @@ const WikiBrowser = ({ subjectId }: WikiBrowserProps) => {
 
     setAvailableMaterials(subjectMaterials)
     setSelectedMaterialIds(subjectMaterials.map(m => m.id))
-    setMaterialSelectOpen(true)
+    setCustomInstruction('')
+    setBuildModalOpen(true)
   }
 
-  const handleBuildWithSelected = async () => {
+  const handleConfirmBuild = async () => {
     if (selectedMaterialIds.length === 0) {
       message.warning('请至少选择一份资料')
       return
     }
-    setMaterialSelectOpen(false)
-    setBuilding(true)
-    setBuildProgress('正在读取资料...')
-    try {
-      const selectedMats = availableMaterials.filter(m => selectedMaterialIds.includes(m.id))
 
-      for (let i = 0; i < selectedMats.length; i++) {
-        const mat = selectedMats[i]
-        setBuildProgress(`正在处理资料 (${i + 1}/${selectedMats.length})：${mat.name}`)
-        const content = mat.content || mat.name
-        await window.electron?.wiki.buildSource(subjectId, mat.name, content)
-      }
+    const selected = availableMaterials.filter(m => selectedMaterialIds.includes(m.id))
+    const fullMaterials = selected.map(m => ({
+      name: m.name,
+      content: m.content || '',
+    }))
 
-      setBuildProgress('正在提取知识点和生成综合页...')
-      await window.electron?.wiki.buildWiki(subjectId)
-
-      message.success(`Wiki 构建完成，处理了 ${selectedMats.length} 份资料`)
-      loadPages()
-    } catch (err) {
-      message.error('构建失败')
-    } finally {
-      setBuilding(false)
-      setBuildProgress('')
+    const result = await window.electron?.wiki.prepareBuildSession(subjectId, fullMaterials)
+    if (!result?.success) {
+      message.error(result?.error || '准备工作区失败')
+      return
     }
+
+    setBuildMaterials(selected.map(m => ({ id: m.id, name: m.name })))
+    setBuildModalOpen(false)
+    setMode('build')
   }
 
   if (!wikiDir) {
@@ -203,7 +198,6 @@ const WikiBrowser = ({ subjectId }: WikiBrowserProps) => {
               size="small"
               icon={<CloudDownloadOutlined />}
               onClick={handleBuildFromMaterials}
-              loading={building}
               title="从现有资料构建"
             />
             <Button type="text" size="small" icon={<ReloadOutlined />} onClick={handleRefresh} />
@@ -220,13 +214,9 @@ const WikiBrowser = ({ subjectId }: WikiBrowserProps) => {
                 size="small"
                 icon={<CloudDownloadOutlined />}
                 onClick={handleBuildFromMaterials}
-                loading={building}
               >
                 从现有资料构建
               </Button>
-              {buildProgress && (
-                <p className="text-xs text-blue-500 px-2">{buildProgress}</p>
-              )}
             </div>
           ) : (
             <Collapse
@@ -275,21 +265,38 @@ const WikiBrowser = ({ subjectId }: WikiBrowserProps) => {
                 }))}
             />
           )}
-          {building && buildProgress && (
-            <div className="px-2 py-2 border-t border-gray-200 mt-2">
-              <div className="flex items-center gap-2">
-                <Spin size="small" />
-                <span className="text-xs text-blue-500">{buildProgress}</span>
-              </div>
-            </div>
-          )}
         </div>
       </div>
 
-      {/* Right: Page Content */}
+      {/* Right: Page Content or Build Mode */}
       <div className="flex-1 flex min-h-0">
-        <div className="flex-1 overflow-auto">
-          {selectedPage ? (
+        {mode === 'build' ? (
+          <div className="flex-1 flex flex-col min-h-0">
+            <div className="flex items-center gap-2 px-4 py-2 border-b border-gray-200 bg-gray-50 flex-shrink-0">
+              <Button type="text" size="small" icon={<ArrowLeftOutlined />}
+                onClick={() => {
+                  setMode('browse')
+                  window.electron?.wiki.cleanupBuildSession(subjectId)
+                  loadPages()
+                }} />
+              <span className="text-sm font-medium text-gray-700">Claude 构建模式</span>
+            </div>
+            <div className="flex-1 min-h-0">
+              <WikiBuildChat
+                subjectId={subjectId}
+                materials={buildMaterials}
+                customInstruction={customInstruction}
+                onComplete={() => {
+                  setMode('browse')
+                  window.electron?.wiki.cleanupBuildSession(subjectId)
+                  loadPages()
+                }}
+              />
+            </div>
+          </div>
+        ) : (
+          <div className="flex-1 overflow-auto">
+            {selectedPage ? (
             contentLoading ? (
               <div className="flex justify-center items-center h-full"><Spin /></div>
             ) : (
@@ -322,54 +329,66 @@ const WikiBrowser = ({ subjectId }: WikiBrowserProps) => {
             </div>
           )}
         </div>
+        )}
       </div>
 
-      {/* Material selection modal */}
+      {/* Build Modal: Material selection + custom instruction */}
       <Modal
-        title="选择要构建 Wiki 的资料"
-        open={materialSelectOpen}
-        onCancel={() => setMaterialSelectOpen(false)}
-        onOk={handleBuildWithSelected}
+        title="构建 Wiki 知识库"
+        open={buildModalOpen}
+        onCancel={() => setBuildModalOpen(false)}
+        onOk={handleConfirmBuild}
         okText={`开始构建 (${selectedMaterialIds.length}/${availableMaterials.length})`}
         cancelText="取消"
-        width={500}
+        width={520}
       >
-        <div className="py-2">
-          <div className="flex items-center justify-between mb-3">
-            <span className="text-xs text-gray-500">
-              已选 {selectedMaterialIds.length} / {availableMaterials.length} 份资料
-            </span>
-            <div className="flex gap-2">
-              <Button size="small" type="link" onClick={() => setSelectedMaterialIds(availableMaterials.map(m => m.id))}>
-                全选
-              </Button>
-              <Button size="small" type="link" onClick={() => setSelectedMaterialIds([])}>
-                全不选
-              </Button>
+        <div className="py-2 space-y-4">
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-medium text-gray-500">
+                选择资料（已选 {selectedMaterialIds.length} / {availableMaterials.length}）
+              </span>
+              <div className="flex gap-2">
+                <Button size="small" type="link" onClick={() => setSelectedMaterialIds(availableMaterials.map(m => m.id))}>
+                  全选
+                </Button>
+                <Button size="small" type="link" onClick={() => setSelectedMaterialIds([])}>
+                  全不选
+                </Button>
+              </div>
+            </div>
+            <div className="max-h-60 overflow-auto space-y-1 border border-gray-100 rounded-lg p-2">
+              {availableMaterials.map(mat => (
+                <label
+                  key={mat.id}
+                  className="flex items-start gap-2 p-2 rounded hover:bg-gray-50 cursor-pointer"
+                >
+                  <Checkbox
+                    checked={selectedMaterialIds.includes(mat.id)}
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        setSelectedMaterialIds(prev => [...prev, mat.id])
+                      } else {
+                        setSelectedMaterialIds(prev => prev.filter(id => id !== mat.id))
+                      }
+                    }}
+                  />
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm text-gray-700 truncate">{mat.name}</div>
+                    <div className="text-xs text-gray-400 truncate">{mat.content?.slice(0, 80) || '无内容预览'}</div>
+                  </div>
+                </label>
+              ))}
             </div>
           </div>
-          <div className="max-h-80 overflow-auto space-y-1 border border-gray-100 rounded-lg p-2">
-            {availableMaterials.map(mat => (
-              <label
-                key={mat.id}
-                className="flex items-start gap-2 p-2 rounded hover:bg-gray-50 cursor-pointer"
-              >
-                <Checkbox
-                  checked={selectedMaterialIds.includes(mat.id)}
-                  onChange={(e) => {
-                    if (e.target.checked) {
-                      setSelectedMaterialIds(prev => [...prev, mat.id])
-                    } else {
-                      setSelectedMaterialIds(prev => prev.filter(id => id !== mat.id))
-                    }
-                  }}
-                />
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm text-gray-700 truncate">{mat.name}</div>
-                  <div className="text-xs text-gray-400 truncate">{mat.content?.slice(0, 80) || '无内容预览'}</div>
-                </div>
-              </label>
-            ))}
+          <div>
+            <label className="text-xs font-medium text-gray-500 block mb-1">补充要求（可选）</label>
+            <Input.TextArea
+              value={customInstruction}
+              onChange={e => setCustomInstruction(e.target.value)}
+              placeholder="如：重点整理第3章内容、增加对比表格..."
+              autoSize={{ minRows: 2, maxRows: 4 }}
+            />
           </div>
         </div>
       </Modal>

@@ -2,8 +2,11 @@ import { useState, useEffect, useRef } from 'react'
 import { Modal, Input, Select, Button, message, Space, Tabs, Table, Switch, Popconfirm, Tag, Spin } from 'antd'
 import {
   PlusOutlined, DeleteOutlined, EditOutlined, RobotOutlined, UserOutlined, SendOutlined,
-  GithubOutlined, FolderOutlined, InfoCircleOutlined, BookOutlined,
+  GithubOutlined, FolderOutlined, InfoCircleOutlined, BookOutlined, AppstoreOutlined,
+  ScanOutlined,
 } from '@ant-design/icons'
+import SkillManager from '../Skills/SkillManager'
+import OcrSettings from './OcrSettings'
 import type { ColumnsType } from 'antd/es/table'
 
 interface SettingsModalProps {
@@ -700,6 +703,26 @@ const SettingsModal = ({ open, onClose }: SettingsModalProps) => {
           )}
         </Space>
       ),
+    },
+    {
+      key: 'skills',
+      label: (
+        <span className="flex items-center gap-1">
+          <AppstoreOutlined />
+          Skill 插件
+        </span>
+      ),
+      children: <SkillManager />,
+    },
+    {
+      key: 'ocr',
+      label: (
+        <span className="flex items-center gap-1">
+          <ScanOutlined />
+          OCR 设置
+        </span>
+      ),
+      children: <OcrSettings />,
     },
   ]
 

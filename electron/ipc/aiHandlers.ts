@@ -1,6 +1,8 @@
-import { ipcMain } from 'electron'
+import { ipcMain, BrowserWindow, dialog } from 'electron'
 import { generateQuestions, chat, generateGraph, generateGraphFromContent, categorizeMaterial, selectMaterialsForGraph, manageSources, generateDocument, reviseDocument, AIProvider, GenerateQuestionParams } from '../services/aiClient'
 import { startOrchestration, resumeCheckpoint, cancelOrchestration, type OrchestrationInput } from '../services/documentOrchestrator'
+import * as claudeSession from '../services/claudeSessionManager'
+import * as skillMgr from '../services/skillManager'
 import { SearchSource } from '../services/searchEngine'
 import { readCollection, writeCollection, appendItem, updateItem, deleteItem } from '../db/store'
 import { reloadSearchEngine } from './searchHandlers'
@@ -158,5 +160,63 @@ export async function registerAIHandlers() {
 
   ipcMain.handle('orchestrator:cancel', async (_event, params: { orchestrationId: string }) => {
     return cancelOrchestration(params.orchestrationId)
+  })
+
+  // === Claude 持久会话 handlers ===
+  ipcMain.handle('claude:getSession', async (_event, { subjectId, sessionKey }: { subjectId: string; sessionKey?: string }) => {
+    return claudeSession.getOrCreateSession(subjectId, sessionKey)
+  })
+
+  ipcMain.handle('claude:sendMessage', async (event, { subjectId, message, sessionKey, timeout }: { subjectId: string; message: string; sessionKey?: string; timeout?: number }) => {
+    return claudeSession.sendMessage(
+      subjectId,
+      message,
+      (delta) => event.sender.send('claude:stream-delta', { subjectId, delta }),
+      (fullText, sessionId) => event.sender.send('claude:stream-complete', { subjectId, fullText, sessionId }),
+      (error) => event.sender.send('claude:stream-error', { subjectId, error }),
+      (toolName, toolInput) => event.sender.send('claude:stream-tool', { subjectId, toolName, toolInput }),
+      sessionKey,
+      timeout,
+    )
+  })
+
+  ipcMain.handle('claude:clearSession', async (_event, { subjectId, sessionKey }: { subjectId: string; sessionKey?: string }) => {
+    return claudeSession.clearSession(subjectId, sessionKey)
+  })
+
+  ipcMain.handle('claude:stopMessage', async (_event, { subjectId, sessionKey }: { subjectId: string; sessionKey?: string }) => {
+    return claudeSession.stopMessage(subjectId, sessionKey)
+  })
+
+  ipcMain.handle('claude:listSessions', async () => {
+    return claudeSession.listSessions()
+  })
+
+  // === Skill 管理 handlers ===
+  ipcMain.handle('skill:list', async () => {
+    return skillMgr.listSkills()
+  })
+
+  ipcMain.handle('skill:toggle', async (_event, { id, enabled }: { id: string; enabled: boolean }) => {
+    return skillMgr.toggleSkill(id, enabled)
+  })
+
+  ipcMain.handle('skill:add', async (_event, sourcePath: string) => {
+    return skillMgr.addSkill(sourcePath)
+  })
+
+  ipcMain.handle('skill:remove', async (_event, id: string) => {
+    return skillMgr.removeSkill(id)
+  })
+
+  // === Dialog handler ===
+  ipcMain.handle('dialog:selectDirectory', async () => {
+    const win = BrowserWindow.getFocusedWindow()
+    if (!win) return null
+    const result = await dialog.showOpenDialog(win, {
+      title: '选择 Skill 目录',
+      properties: ['openDirectory'],
+    })
+    return result.canceled || !result.filePaths[0] ? null : result.filePaths[0]
   })
 }

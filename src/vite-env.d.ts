@@ -72,6 +72,8 @@ interface WikiAPI {
   lint: (subjectId: string) => Promise<{ issues: WikiLintIssue[]; summary: string }>
   saveQueryResult: (subjectId: string, title: string, content: string, sources?: string[]) => Promise<{ success: boolean; error?: string; path?: string }>
   deletePage: (subjectId: string, pageName: string, pageType: string) => Promise<{ success: boolean; error?: string }>
+  prepareBuildSession: (subjectId: string, materials: { name: string; content: string }[]) => Promise<{ success: boolean; wikiDir?: string; error?: string }>
+  cleanupBuildSession: (subjectId: string) => Promise<void>
 }
 
 // === Orchestration types ===
@@ -103,11 +105,27 @@ interface OrchestrationResult {
   totalElapsedMs: number
 }
 
+interface StreamEvent {
+  type: 'topic_start' | 'content_delta' | 'topic_complete' | 'error'
+  topicId?: string
+  topicTitle?: string
+  delta?: string
+  accumulated?: string
+  content?: string
+  qualityPassed?: boolean
+  qualityIssues?: string[]
+  message?: string
+  index?: number
+  total?: number
+}
+
 interface OrchestratorAPI {
   resume: (params: { orchestrationId: string; checkpoint: number; approved: boolean; userNotes?: string }) => Promise<void>
   cancel: (params: { orchestrationId: string }) => Promise<void>
   onProgress: (callback: (snapshot: OrchestrationSnapshot) => void) => void
   removeProgressListener: () => void
+  onStreamEvent: (callback: (event: StreamEvent) => void) => void
+  removeStreamListener: () => void
 }
 
 interface ElectronAPI {
@@ -176,6 +194,7 @@ interface ElectronAPI {
   }
   file: {
     readPdf: (buffer: number[]) => Promise<string>
+    ocrPdf: (filePath: string, engine?: 'tesseract' | 'baidu') => Promise<string | null>
     readDocx: (buffer: number[]) => Promise<string>
     saveFile: (content: string, defaultName: string) => Promise<{ path?: string; cancelled?: boolean }>
     saveUpload: (fileName: string, buffer: number[]) => Promise<{ path?: string }>
@@ -238,6 +257,32 @@ interface ElectronAPI {
     appendHistory: (subjectId: string, historyType: string, entry: { role: string; content: string; timestamp: string }) => Promise<void>
     readHistory: (subjectId: string, historyType: string, limit?: number) => Promise<{ role: string; content: string; timestamp: string }[]>
     clearHistory: (subjectId: string, historyType: string) => Promise<void>
+  }
+  claude: {
+    getSession: (subjectId: string, sessionKey?: string) => Promise<{ subjectId: string; sessionId: string | null; createdAt: string; lastUsed: string; messageCount: number }>
+    sendMessage: (subjectId: string, message: string, sessionKey?: string, timeout?: number) => Promise<void>
+    clearSession: (subjectId: string, sessionKey?: string) => Promise<void>
+    stopMessage: (subjectId: string, sessionKey?: string) => Promise<boolean>
+    listSessions: () => Promise<{ subjectId: string; sessionId: string | null; createdAt: string; lastUsed: string; messageCount: number }[]>
+    onDelta: (callback: (data: { subjectId: string; delta: string }) => void) => void
+    onComplete: (callback: (data: { subjectId: string; fullText: string; sessionId: string | null }) => void) => void
+    onError: (callback: (data: { subjectId: string; error: string }) => void) => void
+    onToolUse: (callback: (data: { subjectId: string; toolName: string; toolInput: Record<string, unknown> }) => void) => void
+    removeListeners: () => void
+  }
+  skill: {
+    list: () => Promise<{ id: string; name: string; description: string; version: string; enabled: boolean; source: string }[]>
+    toggle: (id: string, enabled: boolean) => Promise<void>
+    add: (sourcePath: string) => Promise<{ id: string; name: string; description: string; version: string; enabled: boolean; source: string }>
+    remove: (id: string) => Promise<void>
+  }
+  dialog: {
+    selectDirectory: () => Promise<string | null>
+  }
+  ocr: {
+    getConfig: () => Promise<{ apiKey: string; secretKey: string } | null>
+    saveConfig: (config: { apiKey: string; secretKey: string }) => Promise<{ ok: boolean }>
+    isConfigured: () => Promise<boolean>
   }
 }
 

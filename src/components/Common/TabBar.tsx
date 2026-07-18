@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { DownOutlined } from '@ant-design/icons'
 import { useTheme } from '../../contexts/ThemeContext'
 
-type SubjectTab = 'search' | 'materials' | 'quiz' | 'content' | 'graph' | 'review' | 'analysis' | 'wiki'
+type SubjectTab = 'search' | 'materials' | 'content' | 'graph' | 'review' | 'analysis' | 'wiki'
 
 interface TabGroup {
   id: string
@@ -26,7 +26,6 @@ const TAB_GROUPS: TabGroup[] = [
     label: 'AI 工具',
     color: '#722ed1',
     tabs: [
-      { key: 'quiz', label: 'AI 出题' },
       { key: 'content', label: 'AI 创作' },
       { key: 'graph', label: '知识图谱' },
     ],
