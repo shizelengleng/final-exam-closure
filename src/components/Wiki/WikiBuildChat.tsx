@@ -68,8 +68,7 @@ const WikiBuildChat = ({ subjectId, subjectName, materials, customInstruction, o
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const hasStarted = useRef(false)
-  const { theme } = useTheme()
-  const isDark = theme.colors.bg === '#141414' || theme.colors.bg === '#1a1a1a' || theme.colors.bg === '#000000'
+  const { theme, isDark } = useTheme()
 
   useEffect(() => {
     return () => {

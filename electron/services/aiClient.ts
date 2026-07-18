@@ -408,9 +408,9 @@ function cleanJsonString(raw: string): string {
 
 function sanitizeContentForAI(content: string): string {
   // 清理资料内容中的特殊字符，防止干扰 AI 输出 JSON
+  // 注意：不要转义反斜杠，因为内容会被 JSON.stringify 处理
   return content
     .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '') // 移除控制字符
-    .replace(/\\/g, '\\\\')  // 转义反斜杠
     .replace(/"/g, "'")       // 双引号替换为单引号，避免干扰 JSON
 }
 

@@ -2,13 +2,25 @@ import type { AIConfig, ChatMessage, StreamOptions } from './aiClient'
 import { streamAI } from './aiClient'
 import type { DocumentPlan, TopicPlan, StyleAnchor, OrchestrationInput } from './documentOrchestrator'
 import { streamBroker } from './streamBroker'
-import { appendFileSync } from 'fs'
+import { appendFile } from 'fs/promises'
 import { join } from 'path'
+import { app } from 'electron'
 
-const DEBUG_LOG = join(process.env.TEMP || '/tmp', 'orchestrator-debug.log')
+let debugLogPath: string | null = null
+function getDebugLogPath(): string {
+  if (!debugLogPath) {
+    try {
+      debugLogPath = join(app.getPath('userData'), 'orchestrator-debug.log')
+    } catch {
+      debugLogPath = join(process.env.TEMP || '/tmp', 'orchestrator-debug.log')
+    }
+  }
+  return debugLogPath
+}
+
 function debugLog(msg: string) {
   const line = `[${new Date().toLocaleTimeString()}] [Session] ${msg}\n`
-  try { appendFileSync(DEBUG_LOG, line) } catch {}
+  appendFile(getDebugLogPath(), line).catch(() => {})
   console.log(`[Session] ${msg}`)
 }
 

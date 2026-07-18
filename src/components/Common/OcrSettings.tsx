@@ -13,11 +13,15 @@ const OcrSettings = () => {
   }, [])
 
   const loadConfig = async () => {
-    const config = await window.electron?.ocr.getConfig()
-    if (config) {
-      setApiKey(config.apiKey)
-      setSecretKey(config.secretKey)
-      setConfigured(true)
+    try {
+      const config = await window.electron?.ocr.getConfig()
+      if (config) {
+        setApiKey(config.apiKey)
+        setSecretKey(config.secretKey)
+        setConfigured(true)
+      }
+    } catch (err) {
+      console.error('Failed to load OCR config:', err)
     }
   }
 

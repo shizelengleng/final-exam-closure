@@ -891,12 +891,17 @@ ${truncated}`
     setQualityResult(state, check.passed, check.issues)
 
     return issues
-  } catch {
-    // If JSON parsing fails, return empty issues (no review needed)
-    return []
+  } catch (err) {
+    console.error('[Orchestrator] Phase 4 review JSON parse failed:', err)
+    setQualityResult(state, false, ['终审阶段解析失败，建议人工检查文档'])
+    return [{
+      id: 'review_parse_error',
+      severity: 'warning',
+      topicId: null,
+      description: '终审阶段 AI 返回结果解析失败，建议人工检查文档质量',
+      suggestedFix: '重新运行终审或人工检查文档',
+    }]
   }
-
-  return []
 }
 
 // ===================================================================

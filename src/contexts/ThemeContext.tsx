@@ -120,12 +120,14 @@ interface ThemeContextType {
   theme: ThemeConfig
   themes: ThemeConfig[]
   setTheme: (id: string) => void
+  isDark: boolean
 }
 
 const ThemeContext = createContext<ThemeContextType>({
   theme: THEMES[0],
   themes: THEMES,
   setTheme: () => {},
+  isDark: false,
 })
 
 export const useTheme = () => useContext(ThemeContext)
@@ -149,8 +151,10 @@ export const ThemeProvider = ({ children }: { children: ReactNode }) => {
     setThemeId(id)
   }
 
+  const isDark = themeId === 'dark'
+
   return (
-    <ThemeContext.Provider value={{ theme, themes: THEMES, setTheme }}>
+    <ThemeContext.Provider value={{ theme, themes: THEMES, setTheme, isDark }}>
       {children}
     </ThemeContext.Provider>
   )

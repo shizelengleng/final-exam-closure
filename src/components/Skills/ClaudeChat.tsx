@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { Button, Input, Spin, Tag, Tooltip, Modal, Switch, Checkbox, Empty, message } from 'antd'
 import {
   SendOutlined, UserOutlined, RobotOutlined, DeleteOutlined, PauseOutlined,
@@ -155,9 +155,7 @@ const ClaudeChat = ({ subjectId, subjectName }: ClaudeChatProps) => {
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
-  const { theme } = useTheme()
-
-  const isDark = theme.colors.bg === '#141414' || theme.colors.bg === '#1a1a1a' || theme.colors.bg === '#000000'
+  const { theme, isDark } = useTheme()
 
   useEffect(() => {
     loadSession()
@@ -334,17 +332,20 @@ const ClaudeChat = ({ subjectId, subjectName }: ClaudeChatProps) => {
   }
 
 
-  const selectedMats = materials.filter(m => selectedMaterialIds.includes(m.id))
-  const filteredMaterials = materialSearch
+  const selectedMats = useMemo(() => materials.filter(m => selectedMaterialIds.includes(m.id)), [materials, selectedMaterialIds])
+  const filteredMaterials = useMemo(() => materialSearch
     ? materials.filter(m => m.name.toLowerCase().includes(materialSearch.toLowerCase()))
-    : materials
+    : materials, [materials, materialSearch])
 
-  const tagGroups = new Map<string, Material[]>()
-  for (const mat of filteredMaterials) {
-    const tag = mat.tag || '未分类'
-    if (!tagGroups.has(tag)) tagGroups.set(tag, [])
-    tagGroups.get(tag)!.push(mat)
-  }
+  const tagGroups = useMemo(() => {
+    const groups = new Map<string, Material[]>()
+    for (const mat of filteredMaterials) {
+      const tag = mat.tag || '未分类'
+      if (!groups.has(tag)) groups.set(tag, [])
+      groups.get(tag)!.push(mat)
+    }
+    return groups
+  }, [filteredMaterials])
 
   const template = TEMPLATES.find(t => t.id === selectedTemplate)
 
